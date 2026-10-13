@@ -1,0 +1,62 @@
+{
+  "version": "0.2.15",
+  "offline_checks": [
+    "Native farm worker delivery/income retained; custom courier creation, inventory and movement removed; manual Shaman/native Farmer recruitment retained",
+    "All four original Dark masks reproduce stale clearing flags and pass repaired map without relaxing collision guards",
+    "Actual native Dark collision flags/terrain and all masks; automatic tick-only viewport hints using the native sparse cache; relocation and ABI guards",
+    "Pinned Fortress crash path, explicit no-tool enum and preserved native role/geometry/data",
+    "Pinned initial owner/sector/economy creation, CBarrackRole null read and native default ending branch",
+    "Combined release 0.2.15 runtime, loader, installer, helper mutex/status and user readiness labels",
+    "Pinned aircraft last-created lookup, native board/unload entrypoints and actual unload ring",
+    "Pinned x86 executable, whole-instruction income gateway and save imports",
+    "Exact original/SU executable pins and one shared, hash-pinned installed API; required GUID and Lua exports retained",
+    "Runtime hashes, API exports, x86 architecture and bundled/Windows dependencies",
+    "Version-scoped scenario without waves, timed credits or one-use farm logic",
+    "Actual primary generated Fortress data and staged sources match the combined package",
+    "Installer upgrade, unrelated-change refusal before mutation and original restoration in a temporary game copy"
+  ],
+  "dependencies": {
+    "DarkTribe-0.2.15.dll": [
+      "s4modapi.dll",
+      "gdi32.dll",
+      "msimg32.dll",
+      "bcrypt.dll",
+      "api-ms-win-crt-string-l1-1-0.dll",
+      "api-ms-win-crt-runtime-l1-1-0.dll",
+      "api-ms-win-crt-stdio-l1-1-0.dll",
+      "api-ms-win-crt-math-l1-1-0.dll",
+      "api-ms-win-crt-private-l1-1-0.dll",
+      "user32.dll",
+      "kernel32.dll",
+      "api-ms-win-crt-convert-l1-1-0.dll",
+      "api-ms-win-crt-heap-l1-1-0.dll",
+      "api-ms-win-crt-locale-l1-1-0.dll",
+      "api-ms-win-crt-environment-l1-1-0.dll",
+      "api-ms-win-crt-filesystem-l1-1-0.dll"
+    ],
+    "inject.exe": [
+      "api-ms-win-crt-stdio-l1-1-0.dll",
+      "api-ms-win-crt-runtime-l1-1-0.dll",
+      "api-ms-win-crt-locale-l1-1-0.dll",
+      "api-ms-win-crt-heap-l1-1-0.dll",
+      "api-ms-win-crt-private-l1-1-0.dll",
+      "api-ms-win-crt-string-l1-1-0.dll",
+      "api-ms-win-crt-convert-l1-1-0.dll",
+      "kernel32.dll",
+      "api-ms-win-crt-math-l1-1-0.dll",
+      "api-ms-win-crt-environment-l1-1-0.dll"
+    ],
+    "S4ModApi.dll": [
+      "kernel32.dll",
+      "user32.dll",
+      "gdi32.dll",
+      "advapi32.dll",
+      "ole32.dll",
+      "msimg32.dll",
+      "wininet.dll",
+      "version.dll"
+    ]
+  },
+  "in_game_verification": "not performed; reserved for user",
+  "game_started": false
+}

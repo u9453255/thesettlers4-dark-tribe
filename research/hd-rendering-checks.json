@@ -1,0 +1,21 @@
+{
+  "version": "0.2.15",
+  "hd_files": {
+    "S4HD-Patch.asi": "9dcc4a187da18702f17636daa61d8f7478f4454b8b875eac14886c4501cea5e8",
+    "S4HD-Manager.dll": "9299b9f4ea77b6b34b43897706a78571518c7760e110772bd42d86d01bd5b0a7"
+  },
+  "cached_rendering_and_queued_input": true,
+  "owned_nonactivating_layered_panel": true,
+  "dpi_draw_and_hit_mapping_shared": true,
+  "startup_hash_independent_of_save_hooks": true,
+  "hash_check_before_save_hook_initialization": true,
+  "game_started": false,
+  "live_process_read": false,
+  "game_modules_loaded": false,
+  "gameplay_verified": false,
+  "renderer": "DX11 windowed swapchain",
+  "status_exports": "stdcall bool, no arguments; field reads only",
+  "is_hd_active_rva": "0x2ed5",
+  "video_block_status_rva": "0x2ec9",
+  "native_dll_hash_guard": true
+}

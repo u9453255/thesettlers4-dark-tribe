@@ -1,0 +1,18 @@
+{
+  "version": "0.2.15",
+  "matching_manifest_accepted": true,
+  "old_manifest_refused": true,
+  "changed_dll_refused": true,
+  "unpinned_game_or_code_manifest_refused": true,
+  "changed_selected_api_refused": true,
+  "changed_hd_manifest_refused": true,
+  "slot_assignment_before_native_loading": true,
+  "slot_assignment_with_failed_loader": true,
+  "x86_loader_fixture": true,
+  "injector_usage_check": true,
+  "transient_startup_pid_survives_10_second_gap": true,
+  "new_pid_at_28_seconds_survives": true,
+  "post_ready_restart_grace_60_seconds": true,
+  "startup_grace_180_seconds": true,
+  "game_started": false
+}

@@ -1,0 +1,20 @@
+work/
+backups/
+evidence/
+research/sources/
+__pycache__/
+*.pyc
+*.map
+*.sav
+*.xml
+
+runtime/native/*.dll
+runtime/native/*.exe
+save-states/
+
+runtime/active.json
+
+# Per-machine settings written by tools/setup.py (game folder, node/python paths)
+local-config.json
+
+.claude/worktrees/

@@ -1,0 +1,62 @@
+-- First Dawn v0.2.15. Native farm workers handle mushrooms; the plugin handles paid construction.
+-- No periodic resource grants, automatic army waves or fixed expansion pad.
+DT_Version = 200
+DT_OpponentRevision = 2
+DT_IsNew = 0
+DT_VictoryArmed = 0
+DT_StartWarning = 0
+function DT_Init()
+  DT_IsNew = 1
+  Magic.IncreaseMana(1, 80)
+  Map.SetScreenPos(340, 300)
+  -- Original Viking AI owns construction, production, recruitment and attacks.
+  -- Values follow the shipped single-player scripts; no timed army/resources.
+  AI.SetPlayerVar(2, "AttackMode", 2, 2, 2)
+  AI.SetPlayerVar(2, "AttackDelay", 20, 15, 15)
+  AI.SetPlayerVar(2, "SoldierLimitAbsolute", 120, 200, 200)
+  AI.SetPlayerVar(2, "SoldierLimitRelative", 100, 130, 130)
+  dbg.stm("FIRST DAWN: Build and command the Dark Tribe. Destroy the Viking strongholds.")
+  dbg.stm("Mushroom Farmers carry mushrooms to your Dark Temple or Fortress. Each delivery adds mana.")
+  dbg.stm("Build from the construction menu. Select your Temple or Fortress to recruit units.")
+end
+function DT_Resume()
+  -- Nothing to announce when a game is loaded.
+end
+function DT_Victory()
+  local darkBases = Buildings.Amount(1, Buildings.DARKTEMPLE, Buildings.READY)
+                    + Buildings.Amount(1, 51, Buildings.READY)
+  local enemyBases = Buildings.Amount(2, Buildings.GUARDTOWERSMALL, Buildings.READY)
+                     + Buildings.Amount(2, Buildings.GUARDTOWERBIG, Buildings.READY)
+                     + Buildings.Amount(2, Buildings.CASTLE, Buildings.READY)
+  -- A zero count before map initialization is not a defeated player.
+  -- Arm once both genuine bases have been seen; afterwards destruction is decisive.
+  if DT_VictoryArmed == 0 then
+    if darkBases > 0 and enemyBases > 0 then
+      DT_VictoryArmed = 1
+    else
+      -- A base can be missing only before map initialization; never announced to the player.
+      DT_StartWarning = 1
+      return
+    end
+  end
+  if darkBases == 0 then
+    Game.EnemyPlayersLost(2)
+  elseif enemyBases == 0 then
+    Game.EnemyPlayersLost(1)
+  else
+    -- Native default end logic also evaluates inherited mission objectives.
+    -- Consult it only after this scenario has explicitly declared a loser.
+    return
+  end
+  Game.DefaultGameEndCheck()
+end
+function new_game()
+  request_event(DT_Init, Events.FIRST_TICK_OF_NEW_GAME)
+  request_event(DT_Resume, Events.FIRST_TICK_OF_NEW_OR_LOADED_GAME)
+  request_event(DT_Victory, Events.VICTORY_CONDITION_CHECK)
+end
+function register_functions()
+  reg_func(DT_Init)
+  reg_func(DT_Resume)
+  reg_func(DT_Victory)
+end

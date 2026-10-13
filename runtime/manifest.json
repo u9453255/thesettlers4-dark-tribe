@@ -1,0 +1,24 @@
+{
+  "version": "0.2.15",
+  "game_executable": "C:\\Projects\\thesettlers4\\S4_Main.exe",
+  "game_sha256": "3b561269fb7ce4c281959f8f0db691cebf7cd36a04ad3594461b94290c5d3816",
+  "game_code_sha256": "f6dbb89072f3f0fefa35de23810a22317b8621e7a8a0aec2503ef28aaa25ea0b",
+  "game_large_address_aware": true,
+  "api_version": "2.3",
+  "files": {
+    "DarkTribe-0.2.15.dll": "ee5d5a7d88242f8085f4fe8d337b666ad20573b89c6a6f5472cf71d71a8928c7",
+    "inject.exe": "9c32ab01232388d24fb2dfd4c4fbc576b65f844777c4a47e47b1b634c9cbc034",
+    "S4ModApi.dll": "73482077644fd1fa8eadfaf9fa4d0ad2799f381713a3204988493e8261b26651"
+  },
+  "offline_tests": "passed",
+  "in_game_tests": "left to user",
+  "loaded_api": {
+    "source": "installed",
+    "sha256": "ed111491b1a6bd2822ccd21fec31adedfb35b6bf311cd568d9ff0e6e2193126f",
+    "version": "2.3.2.0"
+  },
+  "hd_renderer": {
+    "S4HD-Patch.asi": "9dcc4a187da18702f17636daa61d8f7478f4454b8b875eac14886c4501cea5e8",
+    "S4HD-Manager.dll": "9299b9f4ea77b6b34b43897706a78571518c7760e110772bd42d86d01bd5b0a7"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "version": "2.50.1516.0",
+  "localPlayerRva": "0xe9482c",
+  "architecture": "x86",
+  "sha256": "f6dbb89072f3f0fefa35de23810a22317b8621e7a8a0aec2503ef28aaa25ea0b",
+  "date": "2026-10-11",
+  "setupPointerRva": "0xe968a0",
+  "slotActorOffset": "0xd8",
+  "supported_executable_sha256": [
+    "f6dbb89072f3f0fefa35de23810a22317b8621e7a8a0aec2503ef28aaa25ea0b",
+    "3b561269fb7ce4c281959f8f0db691cebf7cd36a04ad3594461b94290c5d3816"
+  ],
+  "laa_variant": {
+    "sha256": "3b561269fb7ce4c281959f8f0db691cebf7cd36a04ad3594461b94290c5d3816",
+    "date": "2026-10-12",
+    "difference": "IMAGE_FILE_LARGE_ADDRESS_AWARE bit 0x20 at file offset 0x1a6 only; all other bytes identical"
+  }
+}

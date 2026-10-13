@@ -1,0 +1,98 @@
+# Construction flags and automatic Dark placement hints - 0.2.13
+
+2026-10-12. The user reports new Mushroom Farms complete in 0.2.12, but Temple,
+Fortress and Manacopter Hall do not. Green placement circles only appear after
+moving the mouse over individual areas. No agent gameplay test was performed.
+
+## Evidence and construction correction
+
+The existing PID 29560 log records successful Farm CREATE calls and successful
+mode-1 cancellation/payment for all three larger kinds. The larger jobs then
+wait for the footprint check and refund once, without a CREATE call. Original
+foundation identities disappear or are recycled. This differs from the earlier
+mode-0 cancellation defect fixed in 0.2.10.
+
+The mod still treated `LandscapeIsOccupied` as building occupancy. The official
+[SU API landscape implementation](https://github.com/settlers-united/s4-ModApi/blob/master/S4ModApi/CS4Landscape.cpp)
+delegates to `IsOccupied`; the
+[native map access implementation](https://github.com/settlers-united/s4-ModApi/blob/master/S4ModApi/s4.cpp)
+tests whether the walking-sector WORD at game RVA 0x11630D0 is zero. That can
+reject physically empty, unwalkable ground. It does not establish building
+occupancy. The pinned Dark validator instead reads the BYTE construction flags
+at RVA 0x11630D8 and requires `(flags & 0x5F) == 4`.
+
+File-only decoding of the preserved user AutoSave verifies its file/chunk
+checksums and matches saved chunk 205 to the native BYTE flags serializer,
+chunk 202 to the WORD entity map, and chunk 200 to four-byte landscape cells.
+At the refunded Hall anchor (396,312), all 343 original body cells and 437
+body/margin cells are Dark land, accepted terrain, flag 4 and entity-map zero.
+The Fortress and Temple anchors contain real unit IDs at save time; these remain
+blockers. Their state at the earlier completion tick is unknown. The walking
+sector map is not directly present in this save; the old rejected tile/value
+was not logged. The API misuse is confirmed; its exact live contribution to
+each user's timeout and the effectiveness of this correction require acceptance.
+
+All four conversions now use the actual construction flags and the native Dark
+terrain rules: high nibble 0x10, 0x40 or 0x90, or exactly beach 0x30, excluding
+grass-swamp 0x15. This also corrects the old broad terrain range, which wrongly
+accepted rock/swamp and rejected mud. The full original block/build/dig union
+checks 0x5F. Its one-tile safety margin checks physical bits 0x1F, so the native
+outline-only bit 0x40 outside the body does not incorrectly obstruct conversion.
+Dark-land, terrain, object/entity-map, nearby entity, other-building-mask,
+original UID disappearance and settling checks remain. No entity is moved or
+removed to force completion. Timed-out jobs log `BUILD_BLOCK` with reason,
+tile, terrain, flags and blocking entity ID. Current mana, one payment/refund,
+retained-foundation deduplication and the one-completion limit are unchanged.
+
+## Why cursor movement was needed
+
+Pinned native cursor code calls validator RVA 0x13E4E0 for the cursor and its
+six neighbours, then stores marker values in the native sparse grid at RVA
+0x105413C. The native background scan first filters 16-by-16 chunks through
+ordinary tribal territory owner bits at RVA 0xEEF998. Dark-land construction
+does not require that ordinary ownership. The background filter skips the
+Dark area, while direct cursor validation can add green dots there.
+
+The added tick bridge scans visible Dark land automatically after selecting
+any of the four buildings and after panning/resizing/zooming. It calls the same
+native validator with player 1 and completion flag 0, and uses the same native
+marker values/setter. View bounds come from the native screen-to-map projection
+at RVA 0x259910. No mouse movement, ordinary territory change, guessed rendering
+hook or separately drawn green overlay is required.
+
+Up to 8,192 viewport cells are checked per game tick, starting on the next
+tick. Typical views fit one batch; very large zoomed views finish across
+successive ticks. Occupancy refresh repeats automatically every ten ticks.
+Selecting the same building again resets immediately. The native cache's
+existing entries change in place; the native allocator is called only for
+missing non-default markers. Sparse rows are traversed once per batch rather
+than restarting from the head for every tile. This avoids repeated entry
+growth and quadratic scans. Map changes reset the cache traversal. Rendering
+and mouse callbacks do not run this code, call Lua or wait on the economy lock.
+
+## Guards, verification and limits
+
+The original and exact SU LAA executable pins, shared installed API and HD pins
+remain. Thirteen locally generated instruction regions additionally guard
+the validator, actual flags, projection and native sparse-grid layout before
+use. Relocations are applied to those signatures for the actual image base;
+unknown native changes disable the plugin. Generated bytes and disassembly
+stay in ignored local folders. Schema 2, `DT_Version=200`, native farmers,
+Manacopter controls and original saves/sidecars are retained.
+
+The tenth original non-game native check covers all four original masks,
+every terrain/flag byte, real blockers, no-hover viewport completion, pan/cache
+changes, periodic refresh, batch limits and linear sparse-entry reuse.
+`tools/inspect-placement-hints.py` verifies native dispatch/ABIs, territory
+filter, cache dimensions/sentinel layout and complete signature instructions
+and relocations, using rebased data copies only. The final package report
+records required build, map/Lua/round-trip, disposable startup, file/loader
+refusal and temporary installer checks. No game module is executed by these
+checks. Green-circle display and successful larger-building completion remain
+the user's steps in TESTING.md.
+
+The 0.2.12 DLL/log/source and user save evidence remain under ignored
+`evidence/construction-0212-user-20261012`; older DLLs and failed 0.2.11 evidence
+are retained. Staging 0.2.13 does not activate it in the running game. Close the
+game and use the launcher; wait for **Dark Tribe 0.2.13 ready**. A matched 0.2.12
+save pair may test these runtime corrections; a new map gives a clean baseline.

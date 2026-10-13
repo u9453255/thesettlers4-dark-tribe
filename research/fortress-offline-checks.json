@@ -1,0 +1,18 @@
+{
+  "checks": [
+    "Fortress explicit no-tool enum",
+    "Native Fortress/Temple role equivalence",
+    "Fortress geometry and all other native data preserved",
+    "Original backup unchanged",
+    "Idempotent generation",
+    "Unexpected tool refused",
+    "Other race bytes preserved",
+    "Accepted predecessor regeneration",
+    "Unrelated XML refused",
+    "Corrupt backup refused"
+  ],
+  "game_started": false,
+  "gameplay_verified": false,
+  "version": "0.2.15",
+  "status": "integrated; gameplay unverified"
+}
