@@ -1,0 +1,87 @@
+{
+  "version": "0.2.15",
+  "source": "C:\\Projects\\thesettlers4\\Map\\Campaign\\dark03.map",
+  "source_sha256": "237a1df871a31818e00496a8b1b802cb414902136657aeb5e10561c11ec854fb",
+  "output": "C:\\Projects\\thesettlers4-dark-tribe\\work\\generated\\Map\\User\\DarkTribe_FirstDawn.map",
+  "output_sha256": "24c53a148039cd1282db5e69bd71b8aa6e6d11e9acecb998ab26656c88353895",
+  "changedChunks": [
+    2,
+    7,
+    8,
+    13,
+    6,
+    16,
+    11,
+    14,
+    12,
+    15
+  ],
+  "nativeHumanRace": 3,
+  "playerRecordBytes": 45,
+  "unitRecordBytes": 6,
+  "buildingRecordBytes": 20,
+  "farms": 8,
+  "temples": 1,
+  "opponentRevision": 2,
+  "opponent": {
+    "start": {
+      "x": 75,
+      "y": 401
+    },
+    "relocatedUnits": 9,
+    "startingCarriersAdded": 24,
+    "territoryTiles": 4609,
+    "addedBuildings": [
+      {
+        "type": 47,
+        "x": 75,
+        "y": 362
+      },
+      {
+        "type": 47,
+        "x": 47,
+        "y": 416
+      },
+      {
+        "type": 47,
+        "x": 103,
+        "y": 428
+      },
+      {
+        "type": 2,
+        "x": 75,
+        "y": 375
+      },
+      {
+        "type": 3,
+        "x": 93,
+        "y": 382
+      },
+      {
+        "type": 4,
+        "x": 49,
+        "y": 433
+      },
+      {
+        "type": 40,
+        "x": 107,
+        "y": 408
+      },
+      {
+        "type": 24,
+        "x": 96,
+        "y": 442
+      }
+    ]
+  },
+  "opponentChecks": {
+    "enemyUnits": 68,
+    "enemyBuildings": 10,
+    "allOutsideDarkStart": true,
+    "grassEntrancesConnected": true,
+    "allEntrancesInitiallyOwnedByViking": true,
+    "startingUnitsAndMaterialsOwnedByViking": true,
+    "ownedGrassEntrancesConnected": true
+  },
+  "runtimeVerified": false
+}

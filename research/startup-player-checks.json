@@ -1,0 +1,21 @@
+{
+  "version": "0.2.15",
+  "game_sha256": "3b561269fb7ce4c281959f8f0db691cebf7cd36a04ad3594461b94290c5d3816",
+  "game_code_sha256": "f6dbb89072f3f0fefa35de23810a22317b8621e7a8a0aec2503ef28aaa25ea0b",
+  "crash_trace": "Trace024.txt",
+  "crash_time": "2026-10-12 15:40:14 Europe/Warsaw",
+  "crash_rva": "0x1A36D2",
+  "caller_rva": "0x11437A",
+  "local_player_byte_before_decrement": 0,
+  "table_index_observed": 263,
+  "valid_player1_index_for_same_tick": 8,
+  "invalid_pointer": "0x002F004D",
+  "write_address": "0x002F0059",
+  "helper_started": "15:39:35",
+  "helper_finished": "15:39:45",
+  "trace_opened": "15:40:03",
+  "map_change_causality_proven": false,
+  "gameplay_resolution_verified": false,
+  "game_started": false,
+  "live_process_read": false
+}

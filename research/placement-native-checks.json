@@ -1,0 +1,13 @@
+{
+  "version": "0.2.15",
+  "game_sha256": "3b561269fb7ce4c281959f8f0db691cebf7cd36a04ad3594461b94290c5d3816",
+  "game_code_sha256": "f6dbb89072f3f0fefa35de23810a22317b8621e7a8a0aec2503ef28aaa25ea0b",
+  "game_started": false,
+  "live_process_read": false,
+  "dark_validator_rva": "0x13EBC0",
+  "native_flags_mask": "0x5F",
+  "required_masked_flags": 4,
+  "discarded_map_flags_on_explicitly_prepared_terrain": "0x43",
+  "retained_owner_and_resources": true,
+  "gameplay_placement_verified": false
+}

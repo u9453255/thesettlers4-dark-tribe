@@ -1,0 +1,28 @@
+{
+  "version": "0.2.15",
+  "game_sha256": "3b561269fb7ce4c281959f8f0db691cebf7cd36a04ad3594461b94290c5d3816",
+  "game_started": false,
+  "live_process_read": false,
+  "construction_collision_byte_map_rva": "0x11630D8",
+  "walking_sector_used_for_construction": false,
+  "native_validator_rva": "0x13E4E0",
+  "native_dark_validator_rva": "0x13EBC0",
+  "native_sparse_setter_rva": "0xEEFA0",
+  "native_hint_grid_rva": "0x105413C",
+  "ordinary_territory_filter_bypassed_for_dark_hints_only": true,
+  "territory_ownership_changed": false,
+  "viewport_projection_rva": "0x259910",
+  "tick_batch_limit": 8192,
+  "refresh_ticks": 10,
+  "generated_signature_regions": 13,
+  "relocation_data_copy_bases": [
+    "0x400000",
+    "0x360000",
+    "0x60000000"
+  ],
+  "partial_instruction_or_relocation_pins": false,
+  "native_cache_existing_entries_reused": true,
+  "model_checks": "all four original masks, all terrain/flag bytes, no-hover/pan/refresh scans and sparse entry reuse",
+  "gameplay_building_completion_verified": false,
+  "gameplay_circles_verified": false
+}

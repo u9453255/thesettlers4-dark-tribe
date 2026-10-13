@@ -1,0 +1,8 @@
+# Offline build/verification helpers. tools/setup.py installs missing ones into
+# work/python (git-ignored); nothing here is needed to play.
+pefile==2024.8.26
+capstone==5.0.9
+dnfile==0.18.0
+dncil==1.0.2
+Pillow==12.2.0
+lupa==2.8

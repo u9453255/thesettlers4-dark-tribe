@@ -1,0 +1,23 @@
+{
+  "version": "0.2.15",
+  "observed": {
+    "sha256": "3b561269fb7ce4c281959f8f0db691cebf7cd36a04ad3594461b94290c5d3816",
+    "code_sha256": "f6dbb89072f3f0fefa35de23810a22317b8621e7a8a0aec2503ef28aaa25ea0b",
+    "large_address_aware": true,
+    "characteristics_offset": "0x1a6"
+  },
+  "exact_hash_pins": [
+    "f6dbb89072f3f0fefa35de23810a22317b8621e7a8a0aec2503ef28aaa25ea0b",
+    "3b561269fb7ce4c281959f8f0db691cebf7cd36a04ad3594461b94290c5d3816"
+  ],
+  "only_difference": "IMAGE_FILE_LARGE_ADDRESS_AWARE bit 0x20 at file offset 0x1a6",
+  "both_variants_accepted": true,
+  "unrelated_code_header_append_truncation_refused": true,
+  "single_installed_api_selected": true,
+  "bundled_api_fallback_without_installed_api": true,
+  "unknown_installed_api_and_missing_update_guard_refused": true,
+  "installed_hd_exact_pins_and_changed_manager_refusal": true,
+  "game_started": false,
+  "live_process_read": false,
+  "game_files_written": false
+}

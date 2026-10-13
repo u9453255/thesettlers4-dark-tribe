@@ -1,0 +1,14 @@
+{
+  "version": "0.2.15",
+  "game_sha256": "3b561269fb7ce4c281959f8f0db691cebf7cd36a04ad3594461b94290c5d3816",
+  "game_code_sha256": "f6dbb89072f3f0fefa35de23810a22317b8621e7a8a0aec2503ef28aaa25ea0b",
+  "game_started": false,
+  "live_process_read": false,
+  "crash_rva": "0x134BFE",
+  "role": "CBarrackRole",
+  "null_economy_pointer_read": "0x345",
+  "map_chunk6_byte1": "initial owner ID, converted by native sector initializer",
+  "native_default_end_check_also_consults_game_mode": true,
+  "gameplay_resolution_verified": false,
+  "actual_victory_winner_or_trigger_verified": false
+}

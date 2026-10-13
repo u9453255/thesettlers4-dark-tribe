@@ -1,0 +1,58 @@
+{
+  "version": "0.2.15",
+  "executable": {
+    "sha256": "3b561269fb7ce4c281959f8f0db691cebf7cd36a04ad3594461b94290c5d3816",
+    "code_sha256": "f6dbb89072f3f0fefa35de23810a22317b8621e7a8a0aec2503ef28aaa25ea0b",
+    "large_address_aware": true,
+    "characteristics_offset": "0x1a6"
+  },
+  "selected_api": {
+    "source": "installed",
+    "sha256": "ed111491b1a6bd2822ccd21fec31adedfb35b6bf311cd568d9ff0e6e2193126f",
+    "version": "2.3.2.0"
+  },
+  "components": [
+    {
+      "name": "S4ModApi.dll",
+      "version": "2.3.2.0",
+      "sha256": "ed111491b1a6bd2822ccd21fec31adedfb35b6bf311cd568d9ff0e6e2193126f",
+      "imports_shared_api": false
+    },
+    {
+      "name": "SettlersUnited.asi",
+      "version": "1.4.56.0",
+      "sha256": "3b8b87e0d8f255bf11ca0d6507c51bda6c1d4e18dfa8c07eb236bc41c166fa63",
+      "imports_shared_api": true
+    },
+    {
+      "name": "S4HD-Patch.asi",
+      "version": "0.16.1.0",
+      "sha256": "9dcc4a187da18702f17636daa61d8f7478f4454b8b875eac14886c4501cea5e8",
+      "imports_shared_api": true
+    },
+    {
+      "name": "S4WarriorsLib.asi",
+      "version": "1.4.0.0",
+      "sha256": "b411c39e914cdf65658016199f8a2f0dc77d34f9bb3e337c4bfb22e3214c6ba4",
+      "imports_shared_api": true
+    },
+    {
+      "name": "ExtraZoom.asi",
+      "version": "2.3.0.0",
+      "sha256": "db551a6c3673de7b450625f811f5e5ff5444144e16751f7e562dce5cca8d36e8",
+      "imports_shared_api": false
+    },
+    {
+      "name": "SettlersUnitedLogger.asi",
+      "version": "1.4.1.0",
+      "sha256": "21cd29dbe7ee39c016745f4f9b00e7a82658f94c4d6d718343135500e07506db",
+      "imports_shared_api": true
+    }
+  ],
+  "required_api_guid_and_lua_exports_present": true,
+  "game_started": false,
+  "live_process_read": false,
+  "game_files_written": false,
+  "enabled_optional_features_verified": false,
+  "gameplay_compatibility_verified": false
+}

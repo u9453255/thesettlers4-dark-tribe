@@ -1,0 +1,46 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.MapChunkType = void 0;
+var MapChunkType;
+(function (MapChunkType) {
+    MapChunkType[MapChunkType["UnknownType"] = 0] = "UnknownType";
+    /// Save Game
+    MapChunkType[MapChunkType["SaveGameCommentText"] = 250] = "SaveGameCommentText";
+    MapChunkType[MapChunkType["SaveGameGeneralInformation"] = 130] = "SaveGameGeneralInformation";
+    MapChunkType[MapChunkType["SaveGameMapLandscape"] = 200] = "SaveGameMapLandscape";
+    MapChunkType[MapChunkType["SaveGameFog"] = 135] = "SaveGameFog";
+    MapChunkType[MapChunkType["SaveGameLogo"] = 136] = "SaveGameLogo";
+    MapChunkType[MapChunkType["SaveGameCurrent"] = 132] = "SaveGameCurrent";
+    MapChunkType[MapChunkType["SaveGameFutureEvents"] = 142] = "SaveGameFutureEvents";
+    MapChunkType[MapChunkType["SaveGameEffects"] = 143] = "SaveGameEffects";
+    MapChunkType[MapChunkType["SaveGameAI"] = 150] = "SaveGameAI";
+    MapChunkType[MapChunkType["SaveGameES"] = 180] = "SaveGameES";
+    MapChunkType[MapChunkType["SaveGameMapObjects"] = 170] = "SaveGameMapObjects";
+    MapChunkType[MapChunkType["SaveGameDecoObjects"] = 164] = "SaveGameDecoObjects";
+    MapChunkType[MapChunkType["SaveGamePiles"] = 163] = "SaveGamePiles";
+    MapChunkType[MapChunkType["SaveGameBuildings"] = 162] = "SaveGameBuildings";
+    MapChunkType[MapChunkType["SaveGameSettlers"] = 161] = "SaveGameSettlers";
+    MapChunkType[MapChunkType["SaveGameVehicles"] = 166] = "SaveGameVehicles";
+    MapChunkType[MapChunkType["SaveGameFlyingEntities"] = 168] = "SaveGameFlyingEntities";
+    MapChunkType[MapChunkType["SaveGameAnimals"] = 165] = "SaveGameAnimals";
+    MapChunkType[MapChunkType["SaveGameScript"] = 131] = "SaveGameScript";
+    MapChunkType[MapChunkType["SaveGamePlayers"] = 140] = "SaveGamePlayers";
+    MapChunkType[MapChunkType["SaveGameStatistic1"] = 133] = "SaveGameStatistic1";
+    MapChunkType[MapChunkType["SaveGameStatistic2"] = 137] = "SaveGameStatistic2";
+    MapChunkType[MapChunkType["SaveGameGroups"] = 134] = "SaveGameGroups";
+    MapChunkType[MapChunkType["SaveGameTraders"] = 167] = "SaveGameTraders";
+    /// Game Map
+    MapChunkType[MapChunkType["MapGeneralInformation"] = 1] = "MapGeneralInformation";
+    MapChunkType[MapChunkType["MapPlayerInformation"] = 2] = "MapPlayerInformation";
+    MapChunkType[MapChunkType["MapTeamInformation"] = 3] = "MapTeamInformation";
+    MapChunkType[MapChunkType["MapPreview"] = 4] = "MapPreview";
+    MapChunkType[MapChunkType["MapUnknown5"] = 5] = "MapUnknown5";
+    MapChunkType[MapChunkType["MapObjects"] = 6] = "MapObjects";
+    MapChunkType[MapChunkType["MapSettlers"] = 7] = "MapSettlers";
+    MapChunkType[MapChunkType["MapBuildings"] = 8] = "MapBuildings";
+    MapChunkType[MapChunkType["MapStacks"] = 9] = "MapStacks";
+    MapChunkType[MapChunkType["MapUnknown10"] = 10] = "MapUnknown10";
+    MapChunkType[MapChunkType["MapQuestText"] = 11] = "MapQuestText";
+    MapChunkType[MapChunkType["MapQuestTip"] = 12] = "MapQuestTip";
+    MapChunkType[MapChunkType["MapLandscape"] = 13] = "MapLandscape";
+})(MapChunkType || (exports.MapChunkType = MapChunkType = {}));

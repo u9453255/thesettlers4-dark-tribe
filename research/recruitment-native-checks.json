@@ -1,0 +1,39 @@
+{
+  "game_sha256": "3b561269fb7ce4c281959f8f0db691cebf7cd36a04ad3594461b94290c5d3816",
+  "game_code_sha256": "f6dbb89072f3f0fefa35de23810a22317b8621e7a8a0aec2503ef28aaa25ea0b",
+  "game_started": false,
+  "live_process_read": false,
+  "barracks_menu": 46,
+  "cluster_elements": [
+    1766,
+    1767,
+    1768,
+    1769,
+    1770,
+    1771
+  ],
+  "cluster_amounts": [
+    100,
+    0,
+    5,
+    -5,
+    1,
+    -1
+  ],
+  "dispatch_rva": "0xAF67F",
+  "temple_order_rva": "0x145D60",
+  "temple_recruit_rva": "0x145760",
+  "infinite_count": 100,
+  "finite_max": 99,
+  "queue_units": [
+    0,
+    53,
+    52,
+    54,
+    29,
+    32
+  ],
+  "queue_saved_by_role": true,
+  "bracket_sprite": "9.gfx #487 (pressed #486)",
+  "gameplay_verified": false
+}

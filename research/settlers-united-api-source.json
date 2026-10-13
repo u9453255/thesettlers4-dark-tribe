@@ -1,0 +1,12 @@
+{
+  "header_source": "https://raw.githubusercontent.com/settlers-united/s4-ModApi/main/S4ModApi/S4ModApi.h",
+  "header_sha256": "31069630faffea89d21359bdc001261fbf4eef3307b7ee900be4d44934a835d5",
+  "existing_interface_methods": 170,
+  "su_interface_methods": 170,
+  "original_vtable_prefix_identical": true,
+  "required_guid_and_lua_exports_present": true,
+  "game_started": false,
+  "gameplay_compatibility_verified": false,
+  "version": "0.2.12",
+  "full_header_identical_after_line_ending_normalization": true
+}

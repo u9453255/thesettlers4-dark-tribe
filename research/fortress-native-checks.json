@@ -1,0 +1,25 @@
+{
+  "game_sha256": "3b561269fb7ce4c281959f8f0db691cebf7cd36a04ad3594461b94290c5d3816",
+  "game_code_sha256": "f6dbb89072f3f0fefa35de23810a22317b8621e7a8a0aec2503ef28aaa25ea0b",
+  "game_started": false,
+  "live_process_read": false,
+  "tool_parser_rva": "0x139919",
+  "tool_field_offset": "0x1DF",
+  "empty_enum_result": -1,
+  "explicit_no_good": 0,
+  "panel_read_rva": "0x143DC8",
+  "zero_skips_goods_lookup": true,
+  "fault_rva": "0xD428A",
+  "logged_null_goods_sector": true,
+  "computed_fault_read": "0x12E",
+  "native_queue_units": [
+    0,
+    53,
+    52,
+    54,
+    29,
+    32
+  ],
+  "gameplay_resolution_verified": false,
+  "boundary": "Static matching failure path; no proof that all construction crashes are resolved"
+}

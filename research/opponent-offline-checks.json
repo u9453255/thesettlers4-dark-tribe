@@ -1,0 +1,13 @@
+{
+  "version": "0.2.15",
+  "opponentRevision": 2,
+  "checks": [
+    "actual Lua: startup zero counts do not decide victory",
+    "both bases arm victory; last enemy tower and last Dark base decide correct winner",
+    "Fortress and additional enemy towers prevent premature defeat",
+    "native AI settings and one initial grant; resume adds none",
+    "exact new/legacy layouts accepted; mismatched coordinates/counts rejected"
+  ],
+  "game_started": false,
+  "runtimeVerified": false
+}

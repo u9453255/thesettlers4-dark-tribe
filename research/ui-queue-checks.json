@@ -1,0 +1,20 @@
+{
+  "version": "0.2.15",
+  "queue_model": "passed",
+  "placement_reservations": "passed",
+  "panel_hit_targets": "passed",
+  "panel_render": "art/panel-preview.png",
+  "fortress_panel_render": "art/fortress-preview.png",
+  "aircraft_model": "passed",
+  "interaction_model": "passed",
+  "construction_model": "passed",
+  "hd_owned_window_fixture": "passed",
+  "hd_dpi_and_input_model": "passed",
+  "pre_hook_file_hash_fixture": "passed",
+  "native_check_count": 11,
+  "per_tick_read_cache": "passed",
+  "construction_flags_and_terrain": "passed",
+  "automatic_dark_hint_scan": "passed",
+  "sparse_hint_cache_reuse": "passed",
+  "game_started": false
+}

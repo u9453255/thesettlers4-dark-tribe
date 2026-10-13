@@ -1,0 +1,37 @@
+{
+  "version": "0.2.15",
+  "game_started": false,
+  "live_process_read": false,
+  "actualEnginePlacementVerified": false,
+  "checks": "0.2.5 regression reproduced for all four real masks; prepared terrain repaired; occupancy, Dark bounds, map edges and unrelated metadata retained",
+  "results": [
+    {
+      "type": 49,
+      "footprintCells": 52,
+      "reservationCells": 92,
+      "oldPreparedAnchorsAccepted": 72,
+      "newPreparedAnchorsAccepted": 391
+    },
+    {
+      "type": 50,
+      "footprintCells": 327,
+      "reservationCells": 421,
+      "oldPreparedAnchorsAccepted": 0,
+      "newPreparedAnchorsAccepted": 391
+    },
+    {
+      "type": 51,
+      "footprintCells": 312,
+      "reservationCells": 410,
+      "oldPreparedAnchorsAccepted": 0,
+      "newPreparedAnchorsAccepted": 391
+    },
+    {
+      "type": 80,
+      "footprintCells": 343,
+      "reservationCells": 437,
+      "oldPreparedAnchorsAccepted": 0,
+      "newPreparedAnchorsAccepted": 391
+    }
+  ]
+}
