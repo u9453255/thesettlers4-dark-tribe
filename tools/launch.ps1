@@ -28,7 +28,7 @@ $deadline = (Get-Date).AddSeconds(180)
 while ((Get-Date) -lt $deadline) {
     if (Test-Path -LiteralPath $statusPath) {
         $startupStatus = Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json
-        if ($startupStatus.status -eq 'ready') { Write-Host 'Dark Tribe 0.2.15 ready. Start a new First Dawn custom scenario.'; exit 0 }
+        if ($startupStatus.status -eq 'ready') { Write-Host 'Dark Tribe 0.2.15 ready. Start a new First Dawn, Iron Kingdom or The Alliance custom scenario.'; exit 0 }
         if ($startupStatus.status -eq 'failed') { throw 'Native startup failed. Close the game; details are in evidence\session-helper.jsonl.' }
     }
     Start-Sleep -Milliseconds 200

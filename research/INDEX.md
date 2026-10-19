@@ -1,10 +1,14 @@
 # Research and evidence index
 
-Updated 2026-10-12. Start with `../HANDOFF.md` for current decisions and `../MAIN.md` for current functionality.
+Updated 2026-10-19. Start with `../HANDOFF.md` for current decisions and `../MAIN.md` for current functionality.
 
 | File | Evidence and scope |
 |---|---|
-| `CONSTRUCTION_INPLACE_0214.md`, `construction-inplace-checks.json` | Current in-place construction: every native field/RVA of the reserved site, rise and completion sequences (checked by `tools/inspect-construction.py`); gameplay unverified |
+| `AI_OFFENCE_0215.md`, `offence-native-checks.json` | Why the computer AI never attacks the Dark Tribe (target filters, no damage path, fire defence), the mod-owned native squad, mirrored attack timing/strength, farms-first targeting, siege and credited destroy; r28: six attack styles, pressure, native soldier supply (barracks/weapons/carriers), territory owner and own-territory greening, flag 0x80; r29: toolsmith shovel orders; r30: the citadel fire re-derived (Euclidean disc, Temple/Fortress only, flames at 16 vs kills to 24), keep-off rules, fire routing and guard, field evidence of fire losses; r32: style sizes and gardener counts scaled with the army, the convoy that keeps gardeners with the soldiers (checked by `tools/inspect-offence.py`); gameplay unverified |
+| `CRASH_DIAGNOSTICS_0215.md`, `diagnostics-checks.json` | r26: the vanilla `lua_close` double free on map exit (not Dark Tribe), heap-free crash/freeze diagnostics, the disposable fixture and the offline dump reader |
+| `ALLIANCE_0215.md`, `alliance-build.json`, `alliance-checks.json` | r25 The Alliance (dark07, 512x512, four players), 512-map support, r27 gardeners and r28 start supply (barracks, weapons, shovels, carriers, levelled ground); r31 clean-start check |
+| `IRON_KINGDOM_0215.md`, `iron-kingdom-build.json`, `iron-kingdom-checks.json` | r24 Iron Kingdom (AO_trojan10), r27 gardeners and r28 barracks, weapons and shovels; r31 clean start (two farms in the northern Temple's fire field removed) |
+| `CONSTRUCTION_INPLACE_0214.md`, `construction-inplace-checks.json` | Current in-place construction: every native field/RVA of the reserved site, rise and completion sequences; r30: citadel fire blockade (no Farm within Euclid 33 of a Temple/Fortress fire centre) and start-map/load farm removal through the crush path (checked by `tools/inspect-construction.py`); gameplay unverified |
 | `recruitment-native-checks.json` | Native barracks cluster amounts, Dark Temple order clamps and saved queue layout (`tools/inspect-recruitment.py`) |
 | `BUILDING_LIMIT_0215.md`, `interaction-native-checks.json` | One Dark Temple and one Dark Fortress: counting rule, removal marking (RVA 0x16D030) and crush path, tick enforcement, Settlers United placement hotkeys that only create sites; gameplay unverified |
 | `CONSTRUCTION_HINTS_0213.md`, `placement-hint-checks.json` | Current actual construction flags/terrain and automatic tick-only Dark viewport hints; all-mask/no-hover/cache-reuse models and native signature/ABI checks; gameplay remains user acceptance |

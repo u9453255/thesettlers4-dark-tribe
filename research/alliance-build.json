@@ -1,0 +1,985 @@
+{
+  "version": "0.2.15",
+  "scenario": "alliance",
+  "source": "C:\\Projects\\thesettlers4\\Map\\Campaign\\dark07.map",
+  "source_sha256": "7d95a9fa2b8ee7019144e980b240a43d032bd2cf7c724037bcfb5ba9f4dcb403",
+  "output": "C:\\Projects\\thesettlers4-dark-tribe\\work\\generated\\Map\\User\\DarkTribe_Alliance.map",
+  "output_sha256": "36a9a9b80ad9242378fca0f74065143a8760d62ac2c2e9a31e2c5cc5d94f16a0",
+  "changedChunks": [
+    2,
+    3,
+    7,
+    8,
+    9,
+    6,
+    13,
+    16,
+    11,
+    14,
+    12,
+    15
+  ],
+  "players": [
+    [
+      3,
+      303,
+      423
+    ],
+    [
+      0,
+      98,
+      353
+    ],
+    [
+      1,
+      367,
+      116
+    ],
+    [
+      2,
+      260,
+      263
+    ]
+  ],
+  "darkUnits": 109,
+  "darkBuildings": 1,
+  "romanBuildings": 15,
+  "vikingBuildings": 16,
+  "mayaBuildings": 11,
+  "reinforcedTowers": 19,
+  "fieldArmy": 36,
+  "gardeners": 12,
+  "gardenerCells": {
+    "2": [
+      [
+        100,
+        351
+      ],
+      [
+        96,
+        352
+      ],
+      [
+        100,
+        352
+      ],
+      [
+        96,
+        353
+      ]
+    ],
+    "3": [
+      [
+        369,
+        114
+      ],
+      [
+        365,
+        115
+      ],
+      [
+        369,
+        115
+      ],
+      [
+        365,
+        116
+      ]
+    ],
+    "4": [
+      [
+        264,
+        273
+      ],
+      [
+        267,
+        273
+      ],
+      [
+        269,
+        273
+      ],
+      [
+        270,
+        273
+      ]
+    ]
+  },
+  "barracks": [
+    {
+      "owner": 2,
+      "type": 24,
+      "x": 122,
+      "y": 364,
+      "entrance": [
+        126,
+        371
+      ],
+      "objectsCleared": 10,
+      "ground": {
+        "levelled": "core",
+        "height": 5,
+        "originalSpan": 12,
+        "groundSpan": 14,
+        "maxSpan": 4,
+        "flatRadius": 8,
+        "cells": 66,
+        "heightsChanged": 55,
+        "shadingsChanged": 70,
+        "step": 10,
+        "authoredStep": 11,
+        "authoredBuildings": 37,
+        "searchRing": 0
+      }
+    },
+    {
+      "owner": 3,
+      "type": 24,
+      "x": 367,
+      "y": 103,
+      "entrance": [
+        365,
+        105
+      ],
+      "objectsCleared": 1,
+      "ground": {
+        "levelled": "core",
+        "height": 3,
+        "originalSpan": 7,
+        "groundSpan": 7,
+        "maxSpan": 4,
+        "flatRadius": 8,
+        "cells": 63,
+        "heightsChanged": 55,
+        "shadingsChanged": 55,
+        "step": 4,
+        "authoredStep": 11,
+        "authoredBuildings": 37,
+        "searchRing": 0
+      }
+    },
+    {
+      "owner": 4,
+      "type": 24,
+      "x": 299,
+      "y": 272,
+      "entrance": [
+        298,
+        274
+      ],
+      "objectsCleared": 3,
+      "ground": {
+        "levelled": "core",
+        "height": 2,
+        "originalSpan": 4,
+        "groundSpan": 4,
+        "maxSpan": 4,
+        "flatRadius": 8,
+        "cells": 51,
+        "heightsChanged": 32,
+        "shadingsChanged": 34,
+        "step": 3,
+        "authoredStep": 11,
+        "authoredBuildings": 37,
+        "searchRing": 0
+      }
+    }
+  ],
+  "toolsmiths": [
+    {
+      "owner": 2,
+      "type": 21,
+      "x": 137,
+      "y": 383,
+      "entrance": [
+        139,
+        385
+      ],
+      "objectsCleared": 1,
+      "ground": {
+        "levelled": "core",
+        "height": 11,
+        "originalSpan": 14,
+        "groundSpan": 14,
+        "maxSpan": 4,
+        "flatRadius": 8,
+        "cells": 33,
+        "heightsChanged": 28,
+        "shadingsChanged": 40,
+        "step": 7,
+        "authoredStep": 11,
+        "authoredBuildings": 37,
+        "searchRing": 19
+      }
+    },
+    {
+      "owner": 3,
+      "type": 21,
+      "x": 382,
+      "y": 96,
+      "entrance": [
+        383,
+        98
+      ],
+      "objectsCleared": 42,
+      "ground": {
+        "levelled": "core",
+        "height": 7,
+        "originalSpan": 6,
+        "groundSpan": 6,
+        "maxSpan": 4,
+        "flatRadius": 8,
+        "cells": 36,
+        "heightsChanged": 33,
+        "shadingsChanged": 43,
+        "step": 6,
+        "authoredStep": 11,
+        "authoredBuildings": 37,
+        "searchRing": 15
+      }
+    },
+    {
+      "owner": 4,
+      "type": 21,
+      "x": 298,
+      "y": 285,
+      "entrance": [
+        301,
+        287
+      ],
+      "objectsCleared": 6,
+      "ground": {
+        "levelled": "core",
+        "height": 2,
+        "originalSpan": 6,
+        "groundSpan": 7,
+        "maxSpan": 4,
+        "flatRadius": 8,
+        "cells": 36,
+        "heightsChanged": 24,
+        "shadingsChanged": 35,
+        "step": 6,
+        "authoredStep": 11,
+        "authoredBuildings": 37,
+        "searchRing": 13
+      }
+    }
+  ],
+  "toolsmithPiles": {
+    "2": [
+      {
+        "good": 20,
+        "amount": 8,
+        "x": 144,
+        "y": 385
+      },
+      {
+        "good": 20,
+        "amount": 8,
+        "x": 139,
+        "y": 379
+      },
+      {
+        "good": 10,
+        "amount": 8,
+        "x": 145,
+        "y": 387
+      },
+      {
+        "good": 10,
+        "amount": 8,
+        "x": 132,
+        "y": 378
+      },
+      {
+        "good": 18,
+        "amount": 2,
+        "x": 132,
+        "y": 380
+      }
+    ],
+    "3": [
+      {
+        "good": 20,
+        "amount": 8,
+        "x": 388,
+        "y": 99
+      },
+      {
+        "good": 20,
+        "amount": 8,
+        "x": 377,
+        "y": 92
+      },
+      {
+        "good": 10,
+        "amount": 8,
+        "x": 388,
+        "y": 97
+      },
+      {
+        "good": 10,
+        "amount": 8,
+        "x": 389,
+        "y": 101
+      },
+      {
+        "good": 18,
+        "amount": 2,
+        "x": 389,
+        "y": 103
+      }
+    ],
+    "4": [
+      {
+        "good": 20,
+        "amount": 8,
+        "x": 304,
+        "y": 288
+      },
+      {
+        "good": 20,
+        "amount": 8,
+        "x": 305,
+        "y": 287
+      },
+      {
+        "good": 10,
+        "amount": 8,
+        "x": 305,
+        "y": 290
+      },
+      {
+        "good": 10,
+        "amount": 8,
+        "x": 301,
+        "y": 282
+      },
+      {
+        "good": 18,
+        "amount": 2,
+        "x": 306,
+        "y": 289
+      }
+    ]
+  },
+  "extraCarriers": 120,
+  "extraCarrierCells": {
+    "2": [
+      [
+        100,
+        353
+      ],
+      [
+        100,
+        354
+      ],
+      [
+        96,
+        355
+      ],
+      [
+        97,
+        355
+      ],
+      [
+        98,
+        355
+      ],
+      [
+        99,
+        355
+      ],
+      [
+        100,
+        355
+      ],
+      [
+        95,
+        350
+      ],
+      [
+        97,
+        350
+      ],
+      [
+        98,
+        350
+      ],
+      [
+        99,
+        350
+      ],
+      [
+        100,
+        350
+      ],
+      [
+        101,
+        350
+      ],
+      [
+        95,
+        351
+      ],
+      [
+        101,
+        351
+      ],
+      [
+        95,
+        352
+      ],
+      [
+        101,
+        352
+      ],
+      [
+        101,
+        353
+      ],
+      [
+        101,
+        354
+      ],
+      [
+        101,
+        355
+      ],
+      [
+        96,
+        356
+      ],
+      [
+        97,
+        356
+      ],
+      [
+        99,
+        356
+      ],
+      [
+        100,
+        356
+      ],
+      [
+        101,
+        356
+      ],
+      [
+        94,
+        349
+      ],
+      [
+        95,
+        349
+      ],
+      [
+        96,
+        349
+      ],
+      [
+        97,
+        349
+      ],
+      [
+        98,
+        349
+      ],
+      [
+        100,
+        349
+      ],
+      [
+        101,
+        349
+      ],
+      [
+        94,
+        350
+      ],
+      [
+        102,
+        350
+      ],
+      [
+        102,
+        351
+      ],
+      [
+        102,
+        352
+      ],
+      [
+        94,
+        353
+      ],
+      [
+        102,
+        353
+      ],
+      [
+        94,
+        354
+      ],
+      [
+        102,
+        354
+      ]
+    ],
+    "3": [
+      [
+        369,
+        116
+      ],
+      [
+        365,
+        117
+      ],
+      [
+        365,
+        118
+      ],
+      [
+        366,
+        118
+      ],
+      [
+        368,
+        118
+      ],
+      [
+        369,
+        118
+      ],
+      [
+        364,
+        113
+      ],
+      [
+        365,
+        113
+      ],
+      [
+        366,
+        113
+      ],
+      [
+        367,
+        113
+      ],
+      [
+        368,
+        113
+      ],
+      [
+        369,
+        113
+      ],
+      [
+        370,
+        113
+      ],
+      [
+        364,
+        114
+      ],
+      [
+        370,
+        114
+      ],
+      [
+        364,
+        115
+      ],
+      [
+        364,
+        116
+      ],
+      [
+        370,
+        116
+      ],
+      [
+        370,
+        117
+      ],
+      [
+        364,
+        118
+      ],
+      [
+        370,
+        118
+      ],
+      [
+        364,
+        119
+      ],
+      [
+        365,
+        119
+      ],
+      [
+        366,
+        119
+      ],
+      [
+        367,
+        119
+      ],
+      [
+        370,
+        119
+      ],
+      [
+        364,
+        112
+      ],
+      [
+        365,
+        112
+      ],
+      [
+        366,
+        112
+      ],
+      [
+        367,
+        112
+      ],
+      [
+        368,
+        112
+      ],
+      [
+        369,
+        112
+      ],
+      [
+        370,
+        112
+      ],
+      [
+        371,
+        112
+      ],
+      [
+        363,
+        113
+      ],
+      [
+        371,
+        113
+      ],
+      [
+        363,
+        114
+      ],
+      [
+        371,
+        114
+      ],
+      [
+        363,
+        115
+      ],
+      [
+        371,
+        115
+      ]
+    ],
+    "4": [
+      [
+        271,
+        268
+      ],
+      [
+        271,
+        269
+      ],
+      [
+        249,
+        270
+      ],
+      [
+        271,
+        270
+      ],
+      [
+        249,
+        271
+      ],
+      [
+        271,
+        271
+      ],
+      [
+        249,
+        272
+      ],
+      [
+        271,
+        272
+      ],
+      [
+        249,
+        273
+      ],
+      [
+        249,
+        274
+      ],
+      [
+        250,
+        274
+      ],
+      [
+        251,
+        274
+      ],
+      [
+        265,
+        274
+      ],
+      [
+        266,
+        274
+      ],
+      [
+        269,
+        274
+      ],
+      [
+        272,
+        265
+      ],
+      [
+        272,
+        266
+      ],
+      [
+        272,
+        267
+      ],
+      [
+        272,
+        268
+      ],
+      [
+        272,
+        269
+      ],
+      [
+        248,
+        270
+      ],
+      [
+        248,
+        272
+      ],
+      [
+        272,
+        272
+      ],
+      [
+        272,
+        273
+      ],
+      [
+        272,
+        274
+      ],
+      [
+        249,
+        275
+      ],
+      [
+        250,
+        275
+      ],
+      [
+        253,
+        275
+      ],
+      [
+        266,
+        275
+      ],
+      [
+        268,
+        275
+      ],
+      [
+        271,
+        275
+      ],
+      [
+        273,
+        266
+      ],
+      [
+        273,
+        267
+      ],
+      [
+        273,
+        268
+      ],
+      [
+        247,
+        269
+      ],
+      [
+        273,
+        269
+      ],
+      [
+        247,
+        270
+      ],
+      [
+        247,
+        271
+      ],
+      [
+        273,
+        273
+      ],
+      [
+        273,
+        274
+      ]
+    ]
+  },
+  "sourceGoods": 71,
+  "weaponPiles": {
+    "2": [
+      {
+        "good": 34,
+        "amount": 8,
+        "x": 126,
+        "y": 374
+      },
+      {
+        "good": 34,
+        "amount": 8,
+        "x": 128,
+        "y": 374
+      },
+      {
+        "good": 8,
+        "amount": 8,
+        "x": 130,
+        "y": 374
+      },
+      {
+        "good": 8,
+        "amount": 8,
+        "x": 124,
+        "y": 374
+      }
+    ],
+    "3": [
+      {
+        "good": 34,
+        "amount": 8,
+        "x": 360,
+        "y": 100
+      },
+      {
+        "good": 34,
+        "amount": 8,
+        "x": 360,
+        "y": 102
+      },
+      {
+        "good": 8,
+        "amount": 8,
+        "x": 360,
+        "y": 106
+      },
+      {
+        "good": 5,
+        "amount": 8,
+        "x": 362,
+        "y": 108
+      }
+    ],
+    "4": [
+      {
+        "good": 34,
+        "amount": 8,
+        "x": 294,
+        "y": 274
+      },
+      {
+        "good": 34,
+        "amount": 8,
+        "x": 296,
+        "y": 276
+      },
+      {
+        "good": 8,
+        "amount": 8,
+        "x": 298,
+        "y": 278
+      },
+      {
+        "good": 6,
+        "amount": 8,
+        "x": 293,
+        "y": 269
+      }
+    ]
+  },
+  "shovelPiles": {
+    "2": [
+      {
+        "good": 31,
+        "amount": 8,
+        "x": 102,
+        "y": 355
+      },
+      {
+        "good": 31,
+        "amount": 8,
+        "x": 98,
+        "y": 357
+      }
+    ],
+    "3": [
+      {
+        "good": 31,
+        "amount": 8,
+        "x": 363,
+        "y": 116
+      },
+      {
+        "good": 31,
+        "amount": 8,
+        "x": 371,
+        "y": 116
+      }
+    ],
+    "4": [
+      {
+        "good": 31,
+        "amount": 8,
+        "x": 267,
+        "y": 276
+      },
+      {
+        "good": 31,
+        "amount": 8,
+        "x": 269,
+        "y": 276
+      }
+    ]
+  },
+  "fireCleanStart": {
+    "farmLock": 33,
+    "removedFarms": []
+  },
+  "runtimeVerified": false
+}

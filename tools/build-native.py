@@ -5,6 +5,7 @@ from game_build import ORIGINAL_SHA256, BUNDLED_API_SHA256, verify_executable, s
 import xml.etree.ElementTree as ET
 from placement_pins import generate as placement_signatures
 from construction_pins import generate as construction_signatures
+from offence_pins import generate as offence_signatures
 from gfx_pins import generate as gfx_signatures, GFX
 from project_paths import COMPILER, SDK, game_exe, game_dir, original_building_xml
 ROOT=Path(__file__).resolve().parents[1]
@@ -19,6 +20,7 @@ def build():
     generated=ROOT/'work/native-generated';generated.mkdir(parents=True,exist_ok=True)
     placement_signatures(exe,generated/'placement-signatures.hpp')
     construction_signatures(exe,generated/'construction-signatures.hpp')
+    offence_signatures(exe,generated/'offence-signatures.hpp') # r27 computer offence against the Dark Tribe
     gfx_signatures(generated/'gfx-signatures.hpp') # pinned byte ranges of the game's own sprites (private, ignored folder)
     original=original_building_xml()
     dark=ET.parse(original).find("race[@id='RACE_DARK']")
@@ -53,7 +55,7 @@ def build():
     test=generated/'economy-tests.exe'
     subprocess.run(common+[str(ROOT/'native/economy-tests.cpp'),'-o',str(test)],check=True)
     subprocess.run([str(test)],check=True)
-    for name in ['queue-tests','placement-tests','panel-tests','aircraft-tests','interaction-tests','construction-tests','hd-overlay-tests','file-hash-tests','placement-hints-tests','memory-tests','unit-panel-tests','gfx-tests']:
+    for name in ['offence-tests','queue-tests','placement-tests','panel-tests','aircraft-tests','interaction-tests','construction-tests','hd-overlay-tests','file-hash-tests','placement-hints-tests','memory-tests','unit-panel-tests','gfx-tests','scenario-tests','diagnostics-tests']:
         binary=generated/(name+'.exe')
         subprocess.run(common+['-I'+str(generated),str(ROOT/'native'/(name+'.cpp')),'-lgdi32','-lmsimg32','-lbcrypt','-o',str(binary)],check=True)
         result=subprocess.run([str(binary)],check=True,capture_output=True,text=True,creationflags=subprocess.CREATE_NO_WINDOW)

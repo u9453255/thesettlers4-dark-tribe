@@ -1,5 +1,132 @@
 # Experiment journal
 
+## Round r32: scaled styles and protected convoy (2026-10-19, still 0.2.15)
+
+- User requests:
+  - "Make all styles grow so it will vary across all styles."
+  - From a screenshot of the user's game: the soldiers had already reached a Mushroom Farm while their Gardeners trailed behind unprotected. "Make it so they move all together, protecting them."
+- Cause, read from the r28-r31 code:
+  - Gardeners set off from wherever they were working (63 tiles from the army in the soak).
+  - A march leg ended when 70 % of the soldiers had arrived.
+  - For a target within 40 tiles, the gardeners got no order until the soldiers held it.
+  - Replacements and a hunt's gardeners came straight from home.
+  - The army was released at home without its gardeners.
+- Scaling (`native/offence-model.hpp`):
+  - Raid: a third of the army, at least 10.
+  - Hunt: half the army, at least 16.
+  - Sweep escort: a quarter of the army, at least 8.
+  - None takes more than the army. Assault, pincer and allied still take the whole army.
+  - Gardeners: the r28 number per style plus one per 15 soldiers the style takes.
+  - Cap: 12 gardeners plus one per 10 soldiers above 40, at most 20 (was 12). Recruitment and the toolsmith shovel orders use the same number.
+  - With 120 soldiers: raid 40, hunt 60, sweep escort 30, assault gardeners 16.
+  - Style weights are unchanged.
+- Convoy:
+  - March: every 30 ticks the army goes at most 10 tiles ahead of the convoy's rear (the army or its gardeners). Each gardener gets its own order to a cell 3 tiles behind that point.
+  - Waiting: the army holds while a gardener is farther than 8 + the formation spread from it. After 600 ticks, stragglers are dropped and sent home. A march left without gardeners goes home.
+  - Legs (waypoint, staging cell, home) end only with the convoy together. Near the fire the army never holds; it leaves directly.
+  - At the target, the soldiers screen within 6 tiles of the door, on the side of the nearest Dark fighter. The gardeners wait 4 tiles behind, away from that fighter. They get ring cells when the screen holds, or after 300 ticks with the army within 16 tiles of the door, and never while defenders are at the door.
+  - Top-ups come only from free gardeners within 20 tiles of the army.
+  - The sweep front moves only while the escort holds it, and its gardeners stay within 16 tiles of the escort.
+  - After a hunt, the army walks back to its gardeners when they are more than 30 tiles away (`rally to the gardeners`).
+  - Allied joins, the way home and squads adopted after a load use the same rules.
+  - Scaled raids stay raids after a load.
+  - Every new gardener order goes through the r30 fire keep-off.
+- Logs:
+  - New: `OFFENCE_CONVOY` (waiting for gardeners, gardeners left behind, rally to the gardeners; at most every 300 ticks).
+  - Campaign lines gain `gap= wait=`. `OFFENCE_RECRUIT`/`OFFENCE_RECRUIT_WAIT` gain `wanted=`.
+  - Startup marker: `; scaled styles and protected convoy r32`.
+- Review: five confirmed findings fixed. They were the rear point facing the threat, gardeners left behind sent home, the army going home without them, convoy steps only along clear legs, and scaled raids adopted as assaults after a load. Each fix's test fails when the fix is reverted. A broader "go home without gardeners" rule was tried and reverted, because it aborted campaigns whose gardeners the fire guard had benched.
+- Checks (offline): offence-tests passed, including:
+  - `scaling`;
+  - `convoyRules` with the review cases;
+  - `convoySoak`, a walking simulation of all six styles with armies of 34 and 117 and gardeners at the soldiers' speed or 50 % slower. No deaths, convoy gap at most 21, no gardener more than 22 tiles from the nearest soldier, every assault with the convoy together.
+
+  All other model tests, `-fsyntax-only` of the DLL and `tools/inspect-offence.py` also passed.
+- Status: Staged on 2026-10-19 together with r31: the full `python tools/workflow.py` passed and the staged DLL contains `clean start maps r31` and `scaled styles and protected convoy r32`. Not verified in game. Limits are in `research/AI_OFFENCE_0215.md` (Round r32): walking speed per type is assumed equal, armies may march more slowly, and the march timeout can still start an assault without the gardeners.
+
+## Round r31: clean start maps (2026-10-19, still 0.2.15)
+
+- User request: remove the start farms near the Temple/Fortress from the Dark Tribe maps themselves. The r30 crush at the start works, but the maps should be clean. Future agents must clear such farms when making new Dark Tribe maps.
+- Maps: the builders remove every Dark Mushroom Farm closer than FarmLock (Euclid 33) to a Dark Temple/Fortress fire centre (position + (1,2)), the same rule as the r30 blockade. They also clear the flags the map editor baked under it: 0x08 on the 52 footprint cells, 0x01 on the blocked core, 0x02 on the entrance cells.
+  - First Dawn: 337,282 (Euclid 18.3 from the Temple at 340,300); 7 start farms remain.
+  - Iron Kingdom: 391,124 (12.8) and 413,161 (25.5), both by the northern Temple at 387,133; 9 remain.
+  - The Alliance: nothing removed (it has no start farms).
+  - Scope: Temple (50) and Fortress (51) only, the two buildings with a fire and the ones the r30 crush covers. The user's r30 test (pid 15144, `FARM_FIRE_REMOVED 337,282 ... citadel=340,300`) is the start removal the request calls working; 340,300 is the First Dawn Temple. The Manacopter Hall (80) has no fire, so the Iron Kingdom farm 167,110, Euclid 25.5 from the Hall at 137,89, stays. If the user also wants farms cleared around the Hall, that needs a separate Hall radius in the builder rule, the tests and the CLAUDE.md/AGENTS.md rules.
+  - The maps store no Mushroom Farmer and no mushroom bound to a farm (no type 53 units; the mushroom-like objects are not clustered at farms), so nothing else is removed. Objects, owners, resources, landscape, units and goods are unchanged. The removal runs after every other placement, so the Viking barracks, toolsmiths, piles and units stay where r30 put them.
+  - The build reports (`research/*-build.json`) list the removed farms under `fireCleanStart`.
+- Shared geometry: `tools/citadel-fire.cjs`. `checkNative()` parses `native/citadel-fire.hpp` and `native/blockade-model.hpp` (constants, centre offset, fire2, the strict farm test, kinds 49/50/51) and repeats the construction-tests vectors (3,943 cells), so JS and C++ cannot drift.
+- Tests: the three map tests assert that no farm lies in a field, that exactly the listed farms are gone with their baked flags, and that every other record and flag is unchanged. Broken starts are rejected: a farm moved in to Euclid 32, a removed farm put back, a farm added beside the Alliance Temple. Euclid 33 is accepted. `verify-maps.cjs` checks every `SCENARIOS` entry, including future ones.
+- Rules for future agents: CLAUDE.md ("A new scenario needs") and AGENTS.md.
+- Survey (r30 script on the new maps): the Farm anchors outside the fields are unchanged. First Dawn has 1,423 (2,382 with the body rule), Iron Kingdom 282 (692), The Alliance 575 (1,331). About 36/10/21 separate farms fit outside within hex 70 of the citadels. The northern Iron Kingdom Temple still has only 3 (48) anchors outside; that is the map's own terrain, as in r30.
+- Native: no logic change. Startup marker `; clean start maps r31`. The runtime crush (`FARM_FIRE_REMOVED`) stays as a safety net for old saves and any future map.
+- Checks (offline): the three builders, test-scenario.cjs, test-iron-kingdom.cjs, test-alliance.cjs, verify-maps.cjs, test-placement.cjs, test-scenario.py, inspect-offence.py, inspect-construction.py, inspect-placement.py and inspect-startup-sectors.py passed. Not verified in game.
+
+## Round r30: citadel fire keep-off and farm blockade (2026-10-19, still 0.2.15)
+
+- User decision: computers must not come or dig close to the Temple/Fortress before every Mushroom Farm is destroyed, and soldiers and Gardeners must avoid the fire field in every style and on every path; no farm may stand inside the field (a blockade), and start-map farms inside it are destroyed at once.
+- Field evidence (r27/r28 logs): First Dawn farm 634, the start farm at 337,282 (18.3 from the fire centre), cost all 6 gardeners in 1,260 ticks (pid 5672). Sweeps whose fronts parked 32-36 from a fire centre lost 10, 9 and 5-7 gardeners (pids 10104 and 15576): the gardeners greened their way in to about 22-24. Iron Kingdom farm 778 (44 from the centre) was lost to Dark fighters, not fire.
+- Reverse engineering (file-only, independently re-checked): only `CDarkTempleRole` (Temple and Fortress; the Manacopter Hall has none) runs the fire 0x1458C0, one pass per 31 ticks per building. Its zone is a **Euclidean** disc around position + (1,2), radius 18/20/22/24 for 1/2/3/4+ ready farms (`[0x10EF7AC + p*0x298]`), reaching 27 hex steps between the axes; the old model measured hex steps. Hits kill (255 damage, 6..21 ticks later) units with a selection group on walkable Dark cells of the door's land sector. The visible flames are drawn only at about 16 tiles, while kills reach 24. Green cells are safe, but a gardener stands on the Dark cell it greens, and its native search reaches about 28 tiles around itself.
+- Offence (`native/citadel-fire.hpp` shared geometry, `offence-model.hpp`): every keep is Euclidean from each fire centre at the native maximum, whatever the farm count. `FireLine` 27: no computer unit stands within it. Gardener cells keep 28; soldier destinations keep 27 + formation spread; straight legs keep 3 more. Farms within 33 and Halls within 44 are never targeted, and the Temple/Fortress only once the fire is off. Hunts ignore fighters within 42, and sweep fronts keep 37. The fire counts as on while the native counter, a listed ready farm or a Farm site says so. Exact hex-parallelogram leg checks, a waypoint route search (up to 12 stops), exit points, turned staging lines and a way home that holds outside the fire instead of crossing it. A guard every 10 ticks orders each hot soldier out (per-soldier gate), recalls and benches gardeners whose cell or aimed cell (+0x40/+0x44, jobs 0xAE/0xAF) is within 27, counts lures, and re-plans marches. Free gardeners are checked every step. `FireMargin`, `FireRaidFarms` and the hex `zones`/`exposure`/`detour` are gone. Native AI soldiers in the fire are only logged.
+- Blockade (`native/blockade-model.hpp`): a Farm closer than Euclid 33 to an own Temple/Fortress fire centre (completed or site), or a Temple/Fortress whose field would hold an own Farm, is refused with mode 1 before payment, with a player notice. The placement hints never mark a blocked anchor. On a new map, start farms inside a field are crushed once through the player's own demolish path (Kill with attacker 0, no computer credited); a restored save runs the same sweep once (`reason=load`). Expected: First Dawn 337,282; Iron Kingdom 391,124 and 413,161; The Alliance none. Every map keeps room for farms.
+- Pins: 10 new offence regions (91 in total; 301 instruction checks) and 8 new construction regions (crush path, ready-counter decrement, Farm credit byte; 47 in total).
+- Logs: `OFFENCE_FIRE`, `OFFENCE_FIRE_STATE`, `OFFENCE_FIRE_NATIVE`, `FARM_FIRE_REMOVED`, new avoid/return/decline reasons (`... the fire defence`), `PLACEMENT_SCAN ... fireBlockade=`. Startup marker `; citadel fire keep-off and farm blockade r30`.
+- Review fixes (7 confirmed findings): per-soldier resend gate; exact leg checks with hex legs and a route search instead of sampled straight legs (a probe went from 19 deaths to 0); no way home straight through the fire; a two-citadel soak; sweep escort lures counted; the identifier `far` renamed; the load sweep for pre-r30 saves.
+- Checks (offline): offence-tests including field-like soaks over all six styles and a Temple-plus-Fortress soak (0 deaths, no soldier within 24, outer farms fall; the soaks fail against the old model or with the guard disabled), construction-tests `fireBlockade`, all model tests, `-fsyntax-only` of the DLL, every file-only inspector and `test-scenario.py`. Staged 2026-10-19 after the full workflow passed. Not verified in game.
+
+## Round r29: computers make shovels for their Gardeners (2026-10-19, still 0.2.15)
+
+- User request: the computers' economies should make shovels when Gardeners are missing. Field log pid 10104 (r28, Iron Kingdom twice): shovels fell from 15 to 2 by tick ~21,000, then `OFFENCE_RECRUIT_WAIT reason=no spare shovels` for about 70,000 ticks; gardeners fell to 0 and no Dark building collapsed, although Iron Kingdom has a toolsmith and an iron/coal chain.
+- Reverse engineering (file-only): a toolsmith makes nothing unless a tool is ordered (round robin 0x14D008 over the economy's order bytes eco+0x348, decremented unless 100). The order is net event 0x13A9 -> 0xD6A90(eco, good, amount): 0 clears, 100 is continuous, other amounts are added and clamped to 0..100. The byte vectors are saved with the economy (0xD3F02). The AI's building manager sub_249400 orders shovels only for its diggers (0x249835, always positive). While it holds a built toolsmith task, it also sends `10-2*diggers` (0x249770): 0 at its 5-digger steady state, which clears the order, and negative above, which lowers it.
+- Plugin (`offenceTools`, `offenceShovelGuard`; model `shovelOrder`/`shovelTarget`/`ShovelWatch`): every 250 ticks, while gardeners are missing and free shovels are at the reserve, the plugin tops the home economy's shovel order up to the shovels still needed (at most 4). It orders only with a ready toolsmith in that economy and never on a continuous order. Every tick a transient watch puts back the plugin's part after a drop of two or more; a drop of one is production. The order byte is the only persistent state; there is no `dt::State` field.
+- Maps (start content): First Dawn and each Alliance people get a TOOLSMITH beside their barracks with IRONBAR x16, COAL x16 and HAMMER x2. Iron Kingdom's own toolsmith gets IRONBAR x16 and COAL x16.
+- Logs: `OFFENCE_TOOLS` (`ordered`, `order refused`, `no toolsmith`, `already ordered`, `restored after a native clear`, `restores=`) and `OFFENCE_SUPPLY ... toolsmiths= shovelOrder= ironbars= coal=`.
+- Review fixes: the AI's 0x249770 clear (both review lenses, verified by disassembly) is pinned (0x24940E, 0x249720, 0x2497A3), checked in inspect-offence and handled by the watch. The fake toolsmith has an AI pass sending 0 or -4: 126 ticks to refill with the watch, 1,050 without it. The r29 round documents were added.
+- Checks: offence-tests, `-fsyntax-only` of the DLL, inspect-offence (268 instruction checks, 81 pins), map tests. Staged on 2026-10-19 after the game was closed: the full `python tools/workflow.py` passed (all offline steps), and the staged `runtime/native/DarkTribe-0.2.15.dll` contains `toolsmith shovel orders r29`. Not verified in game.
+
+## Round r28: aggressive computers, six attack styles, new armies, land taken back (2026-10-15, still 0.2.15)
+
+- User test of r27 (log pid 5672): attacks worked and farms collapsed natively, but First Dawn's first attack came after about 67 game minutes, its gardeners all died and none was ever recruited (silent refusal); in The Alliance every army stayed a 12-soldier raid and raids never went for the Temple; reclaiming was mostly gardeners being called back. The user asked for earlier, stronger and varied attacks (at least 4-5 kinds), new armies after a lost one, many more gardeners, much more land taken back (also Dark ground inside the computers' own territory), and the Temple and Fortress as the goal once the farms are gone.
+- Director (`native/offence-model.hpp`): first attack after AttackDelay/3 within 3..8 minutes, 50 % +25 % per check, no 15-fighter rule, a short rest between campaigns; six styles (raid, assault, pincer, sweep, hunt, allied) by weighted choice; every style may take the Temple/Fortress once no ready farm stands (before Halls); assaults fight down to 30 %; raids take at most 3 buildings.
+- Reclaim in every phase: Dark ground of the computer's own territory first (rotating band scan of the flag map with the native owner reader 0x58A40 layout), then the Dark border from the first minute; up to 4 gardeners per 150 ticks, no 35-tile keep-off any more (fire and parked citadels only). Gardener recruitment up to 12 every 250 ticks, with `OFFENCE_RECRUIT_WAIT` reasons.
+- Reverse engineering (file-only): the native AI re-arms by itself where a barracks, weapons and carriers exist (CAIAgentRecruitment 0x32CD0 -> barracks orders; CBarrackRole 0x134AC0 converts carrier + weapon; weaponsmith orders via event 0x1E). Flag 0x80 is military influence, so the r27 `free()` test refused every cell in computer territory: fixed.
+- Maps (`tools/scenario-supply.cjs`, start content only): First Dawn gets 48 weapons at its barracks, 16 shovels and 30 carriers; Iron Kingdom a barracks for its weapon chain, 32 starter weapons and 16 shovels; each Alliance people a barracks of its race, 32 weapons, 16 shovels and 40 carriers. The new barracks stand on level ground like each map's own buildings (heights and slope shading of their levelled cells only). Map tests check every new record and refuse moved, missing or unlevelled ones.
+- Four adversarial review rounds (each finding re-checked by an independent verifier): wider keep circles around citadel rings; while a Temple/Fortress parks settlers at most dark-2 gardeners of one campaign work its ring and the rest walk home, for at most 900 ticks per target; a target is given up for 6,000 ticks once as many gardeners died there as the style takes (or all did); fire-locked farms no longer block the Halls; rotating reclaim start; no target inside the fire of 3+ farms; Dark fighters as keep circles for reclaiming; stable pincer halves; allied escorts go home when the siege stalls; hunts take gardeners only at the hand-over; staggered, bounded reclaim passes; checked flank cells.
+- New logs `OFFENCE_SUPPLY`, `OFFENCE_JOIN`, `OFFENCE_CALL`, `OFFENCE_FRONT`, `OFFENCE_HUNT`, `style=` on every campaign line. Inspect checks and nine new pins for the territory facts. Full offline workflow passed. Not verified in game; see TESTING.md r28.
+
+## Round r27: computer offence against the Dark Tribe (2026-10-14, still 0.2.15)
+
+- The user reported that the computer opponents never attack the Dark Tribe and asked to reverse-engineer the computer AI so it attacks properly: Mushroom Farms first, then the citadel, then win.
+- Reverse engineering (file-only, with the game's own matching `S4_MainR.pdb` names): the native AI collects only towers and castles (types 46..48) as attack goals and needs the military group nibble 0xC on every target, so Dark buildings are never targets ("No attack"). No native unit can damage a Dark building. The native "farms first" rule is the Temple/Fortress fire defence, which weakens with every destroyed farm and is off without farms. Notes: `research/AI_OFFENCE_0215.md`.
+- New offence director per computer sector AI (`native/offence-model.hpp`, `native/offence-native.hpp`, `OffenceOps`/`offenceTick` in `dark-tribe.cpp`): native attack timing and strength rules from the AI's own config, the AI's own free soldiers in a native state-6 squad, marches around fire zones, farms first, citadels only for total armies, and the native dissolve to give soldiers back. Saved mod squads are adopted again after a load; the plugin hands them back if it stops.
+- Follow-up from the user: Dark buildings must fall to Gardeners greening the land around them. The army now escorts the AI's own Gardeners (type 50), which green the building's ring so it collapses natively (credited); the plugin's destroy call is only a fallback for an all-green ring. Idle Gardeners reclaim Dark land near their base. The maps give each computer player authored Gardeners (6/8/4 per people), and the AI recruits more natively (carrier + shovel, one at a time). A fourth reverse-engineering round (`work/native-analysis/ai/r4-*.md`) established the native recruitment path, the collapse rule (ring sizes 24/64/66/66) and that the AI never touches Gardeners.
+- Hardening: destroyed buildings no longer count as standing for "Return to base", Temple queues and the panel.
+- New `native/offence-tests.cpp`, `tools/inspect-offence.py` and `tools/offence_pins.py` (startup return code 13). Full offline workflow passed. Not verified in game; see TESTING.md r27.
+
+## Round r26: crash and freeze diagnostics (2026-10-14, still 0.2.15)
+
+- The user asked why the game crashed (`Trace078.txt`), then asked for better crash logging. The plugin was not loaded in any of the three crashed sessions (ordinary map `3_1_0_1.map`). The WER dumps from 00:40 and 01:26 show `c0000374`, ntdll heap failure type 8 (double free), while the game closes the map's Lua state in `CGameRun::Exit()` (`lua_close`, RVA 0x2797D0). The 01:55 stop left no crash record: its trace ends in the autosave's Lua save step, most likely a hang (unconfirmed). See `research/CRASH_DIAGNOSTICS_0215.md`.
+- New heap-free diagnostics in the plugin (`native/diagnostics.hpp`):
+  - fatal exceptions and ntdll heap failure records, each with a stack;
+  - stacks for first-chance faults;
+  - a 10 s main-thread freeze watchdog with snapshot dumps in `evidence/`;
+  - a normal-exit line.
+- New workflow step `tools/test-diagnostics.py` (disposable non-game fixture) and the offline dump reader `tools/read-crash-dump.py`.
+- Unit tests, the fixture run and a compile check passed offline. Not verified in game; see TESTING.md r26.
+
+## Round r25: The Alliance scenario, 512 maps, four players (2026-10-14, still 0.2.15)
+
+- The user asked to make `dark07` playable. `tools/build-alliance.cjs` turns it into a four-player scenario: the Dark Tribe (one Temple, 109 units, no farms) as human player 1 against allied computer Romans, Vikings and Mayas with reinforced towers and field armies.
+- The plugin no longer assumes a 576 map: `native/map-size.hpp` reads the engine's map stride (pinned) for every map array; the scene fingerprint covers any player count (`native/scenario-model.hpp`, mirrored by `tools/scenarios.py`).
+- Offline workflow passed (24 steps). Not verified in game; see TESTING.md r25.
+- First test: The Alliance crashed while loading because the launcher helper waited for the map size (only known once the map loads) and assigned the human slot too late. The helper no longer uses the map size.
+
+## Round r24: Iron Kingdom scenario (2026-10-14, still 0.2.15)
+
+- The user asked for a second playable Dark Tribe map with a serious challenge. A survey of all game maps chose the Trojan campaign map `AO_trojan10`: a complete computer Viking kingdom against two Dark Tribe camps on one 576x576 land mass.
+- `tools/build-iron-kingdom.cjs` makes it a two-player scenario (merged Dark camps as human player 1, Vikings player 2 with manned towers and a field army, Trojans removed); `tools/test-iron-kingdom.cjs` checks it against the source. Lua `scenario/DarkTribe_IronKingdom.txt`.
+- The plugin fingerprint, launcher helper, setup, installer (upgrade adds the new map to existing installations) and checks take the scenario list from `native/scenario-model.hpp` / `tools/scenarios.py`.
+- Offline workflow passed (22 steps). Not verified in game; see TESTING.md r24.
+
 ## Repository cleanup for other users (2026-10-13, still 0.2.15)
 
 - The user asked to make the repository usable by other people. No plugin, scenario or pin change; release markers stay 0.2.15.

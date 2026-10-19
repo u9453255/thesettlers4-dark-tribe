@@ -1,0 +1,139 @@
+{
+  "version": "0.2.15",
+  "game_started": false,
+  "live_process_read": false,
+  "players": 2,
+  "darkBuildings": 12,
+  "darkUnits": 156,
+  "fireCleanStart": {
+    "farmLock": 33,
+    "removedFarms": [
+      {
+        "index": 50,
+        "x": 391,
+        "y": 124,
+        "owner": 1,
+        "citadel": {
+          "type": 50,
+          "x": 387,
+          "y": 133
+        },
+        "euclid": 12.77
+      },
+      {
+        "index": 66,
+        "x": 413,
+        "y": 161,
+        "owner": 1,
+        "citadel": {
+          "type": 50,
+          "x": 387,
+          "y": 133
+        },
+        "euclid": 25.51
+      }
+    ]
+  },
+  "vikingBuildings": 83,
+  "vikingUnits": 161,
+  "vikingGardeners": 8,
+  "vikingGoods": 26,
+  "addedBarracks": {
+    "x": 441,
+    "y": 358,
+    "entrance": [
+      439,
+      360
+    ],
+    "ground": {
+      "height": 3,
+      "cells": 112,
+      "step": 9
+    }
+  },
+  "toolsmith": {
+    "x": 523,
+    "y": 463,
+    "entrance": [
+      524,
+      465
+    ]
+  },
+  "authoredGround": {
+    "levelled": "footprint",
+    "buildings": 84,
+    "step": 12
+  },
+  "barracksHeightsChanged": 102,
+  "barracksShadingsChanged": 105,
+  "supplyPiles": [
+    {
+      "good": 34,
+      "amount": 8,
+      "x": 472,
+      "y": 352
+    },
+    {
+      "good": 34,
+      "amount": 8,
+      "x": 478,
+      "y": 353
+    },
+    {
+      "good": 8,
+      "amount": 8,
+      "x": 478,
+      "y": 355
+    },
+    {
+      "good": 5,
+      "amount": 8,
+      "x": 477,
+      "y": 356
+    },
+    {
+      "good": 31,
+      "amount": 8,
+      "x": 471,
+      "y": 349
+    },
+    {
+      "good": 31,
+      "amount": 8,
+      "x": 473,
+      "y": 349
+    },
+    {
+      "good": 20,
+      "amount": 8,
+      "x": 529,
+      "y": 465
+    },
+    {
+      "good": 20,
+      "amount": 8,
+      "x": 518,
+      "y": 459
+    },
+    {
+      "good": 10,
+      "amount": 8,
+      "x": 530,
+      "y": 467
+    },
+    {
+      "good": 10,
+      "amount": 8,
+      "x": 530,
+      "y": 469
+    }
+  ],
+  "rejectedSupplyMutations": 15,
+  "darkPlacementAnchors": {
+    "49": 2930,
+    "50": 247,
+    "51": 197,
+    "80": 200
+  },
+  "runtimeVerified": false
+}

@@ -1,7 +1,20 @@
 // Authored scenario changes; masks and map contents come from the user's local files.
 const assert=require('assert');
 const {prepareGrassCell}=require('./scenario-terrain.cjs');
+const {GOOD,TOOLSMITH,TOOL_INPUTS,TOOL_TOTALS,TOOL_GOODS,steps,reachable,footprintCells,recordCells,pileList,pileByte7,buildingRecord,edgeStep,placePiles,
+  placeToolsmithPiles,describePile,checkPiles,checkCarriers}=require('./scenario-supply.cjs');
 const START={x:75,y:401};
+// Authored Viking gardeners (settler type 50): the native AI never recruits them (CAIAgentGardeners::Execute 0x31740 is empty).
+const GARDENERS=6;
+// Start supplies for new armies (r5): the barracks turns an idle carrier and a weapon into a soldier, the plugin
+// turns a carrier and a shovel into a gardener. Weapons lie beside the barracks entrance, shovels at the start;
+// the extra carriers follow the gardeners. Map start content only, nothing is spawned later.
+const SOURCE_PILES=16,EXTRA_CARRIERS=30;
+const WEAPONS=[GOOD.SWORD,GOOD.SWORD,GOOD.SWORD,GOOD.BOW,GOOD.BOW,GOOD.BATTLEAXE],SHOVELS=[GOOD.SHOVEL,GOOD.SHOVEL];
+// Toolsmith (r29): the Vikings have none, so the plugin's shovel orders could never be made. One TOOLSMITH beside
+// the barracks (searched from TOOLSMITH_NEAR) with IRONBAR x16, COAL x16 and HAMMER x2 beside its entrance; the
+// map's idle SMITH or a carrier with a hammer works it. Placed after every unit and r28 pile, so their positions stay.
+const TOOLSMITH_NEAR=[96,442],TOOL_PILES=[...TOOL_INPUTS,GOOD.HAMMER];
 function prepareOpponent(map,changes,masks) {
   const get=t=>(changes.get(t)||map.chunks.find(c=>c.type===t)).data;
   const players=Buffer.from(get(2));
@@ -72,6 +85,16 @@ function prepareOpponent(map,changes,masks) {
   for(let i=0;i<24;i++) {
     const {x,y}=unitSpot(),u=Buffer.alloc(6);u.writeUInt16LE(x,0);u.writeUInt16LE(y,2);u[4]=1;u[5]=2;addedUnits.push(u);
   }
+  // Gardeners after the carriers (keeps carrier positions unchanged), for the plugin's offence director.
+  for(let i=0;i<GARDENERS;i++) {
+    const {x,y}=unitSpot(),u=Buffer.alloc(6);u.writeUInt16LE(x,0);u.writeUInt16LE(y,2);u[4]=50;u[5]=2;addedUnits.push(u);
+  }
+  // Carriers for soldier and gardener recruitment after the gardeners (earlier positions stay), off every pile.
+  const goods=get(9);
+  for(const [x,y] of pileList(goods))unitCells.add(key(x,y));
+  for(let i=0;i<EXTRA_CARRIERS;i++) {
+    const {x,y}=unitSpot(),u=Buffer.alloc(6);u.writeUInt16LE(x,0);u.writeUInt16LE(y,2);u[4]=1;u[5]=2;addedUnits.push(u);
+  }
   // Pinned landscape initializer seeds owner IDs 0..8 before rebuilding sectors.
   // The source Roman owner 1 becomes Viking player 2 after the race/entity swap.
   for(let at=1;at<objects.length;at+=4) {
@@ -92,11 +115,40 @@ function prepareOpponent(map,changes,masks) {
       objects[at+1]=2;
     }
   }
-  changes.set(7,{data:Buffer.concat([units,...addedUnits]),count:units.length/6+addedUnits.length});
-  changes.set(8,{data:Buffer.concat([buildings,...addedBuildings]),count:buildings.length/20+addedBuildings.length});
+  // Weapons beside the barracks entrance, shovels at the start: free piles of the Viking economy on its final land.
+  assert(goods.length===8*SOURCE_PILES,'Unexpected source piles');
+  const allUnits=Buffer.concat([units,...addedUnits]),piles=pileList(goods),byte7=pileByte7(goods);
+  const site={N:576,land,objects,owner:2,byte7,piles,blocked:footprintCells(576,allBuildings,t=>masks[t],1),
+              units:recordCells(576,allUnits,6),seen:reachable(576,land,objects,2,[START.x,START.y])};
+  const barracks=addedBuildings.find(b=>b[4]===24),entrance=[barracks.readUInt16LE(0)+masks._doors[24][0],barracks.readUInt16LE(2)+masks._doors[24][1]];
+  const weapons=placePiles({...site,anchor:entrance,goods:WEAPONS}),shovels=placePiles({...site,anchor:[START.x,START.y],goods:SHOVELS});
+  // Toolsmith site as the other authored Viking buildings (validBuilding: footprint and two-cell halo apart from every
+  // footprint, unit and source pile, prepared as grass at height 10 by prepareGrassCell), also off the new piles, on
+  // owned land, entrance reachable from the start, and the step from the prepared ground to its surroundings no
+  // steeper than next to the other prepared Viking buildings.
+  const toolDoor=masks._doors[TOOLSMITH],newPiles=new Set(piles.map(([x,y])=>key(x,y)));
+  const preparedStep=(type,x,y)=>edgeStep(576,land,new Set(cells(type,x,y,2)),10);
+  const maxStep=Math.max(...addedBuildings.map(b=>preparedStep(b[4],b.readUInt16LE(0),b.readUInt16LE(2))));
+  let toolsmith;
+  for(let r=0;r<=25&&!toolsmith;r++)for(let y=TOOLSMITH_NEAR[1]-r;y<=TOOLSMITH_NEAR[1]+r&&!toolsmith;y++)for(let x=TOOLSMITH_NEAR[0]-r;x<=TOOLSMITH_NEAR[0]+r;x++) {
+    if(Math.max(Math.abs(x-TOOLSMITH_NEAR[0]),Math.abs(y-TOOLSMITH_NEAR[1]))!==r||!validBuilding(TOOLSMITH,x,y))continue;
+    if(cells(TOOLSMITH,x,y,2).some(k=>objects[4*k+1]!==2||newPiles.has(k))||!site.seen[key(x+toolDoor[0],y+toolDoor[1])])continue;
+    const step=preparedStep(TOOLSMITH,x,y);if(step>maxStep)continue;
+    toolsmith={x,y,entrance:[x+toolDoor[0],y+toolDoor[1]],step,maxStep};break;
+  }
+  assert(toolsmith,'No site for the Viking toolsmith');
+  for(const k of cells(TOOLSMITH,toolsmith.x,toolsmith.y,2)){occupied.add(k);prepareGrassCell(land,objects,4*k,false);}
+  const finalBuildings=Buffer.concat([allBuildings,buildingRecord(toolsmith.x,toolsmith.y,TOOLSMITH,2)]);
+  const tools=placeToolsmithPiles({...site,blocked:footprintCells(576,finalBuildings,t=>masks[t],1),seen:reachable(576,land,objects,2,[START.x,START.y])},toolsmith.entrance);
+  changes.set(7,{data:allUnits,count:allUnits.length/6});
+  changes.set(8,{data:finalBuildings,count:finalBuildings.length/20});
+  changes.set(9,{data:Buffer.concat([goods,...weapons,...shovels,...tools]),count:SOURCE_PILES+weapons.length+shovels.length+tools.length});
   changes.set(13,{data:land});changes.set(6,{data:objects});
-  return {start:START,relocatedUnits:relocated.length,startingCarriersAdded:24,
-          territoryTiles,addedBuildings:addedBuildings.map(b=>({type:b[4],x:b.readUInt16LE(0),y:b.readUInt16LE(2)}))};
+  return {start:START,relocatedUnits:relocated.length,startingCarriersAdded:24,startingGardenersAdded:GARDENERS,extraCarriersAdded:EXTRA_CARRIERS,
+          extraCarrierCells:addedUnits.slice(-EXTRA_CARRIERS).map(u=>[u.readUInt16LE(0),u.readUInt16LE(2)]),
+          territoryTiles,addedBuildings:addedBuildings.map(b=>({type:b[4],x:b.readUInt16LE(0),y:b.readUInt16LE(2)})),
+          barracksEntrance:entrance,weaponPiles:weapons.map(describePile),shovelPiles:shovels.map(describePile),
+          toolsmith,toolsmithPiles:tools.map(describePile)};
 }
 function verifyOpponent(map,masks) {
   const get=t=>map.chunks.find(c=>c.type===t).data;
@@ -112,14 +164,29 @@ function verifyOpponent(map,masks) {
       if(type===7){assert(get(6)[4*(y*576+x)+1]===2,'Viking unit starts outside owned settlement');units++;}else buildings++;
     }
   }
-  assert(units===68&&buildings===10,'Incomplete Viking start economy');
+  assert(units===68+GARDENERS+EXTRA_CARRIERS&&buildings===11,'Incomplete Viking start economy');
+  let gardeners=0;for(let i=0;i<get(7).length;i+=6)if(get(7)[i+5]===2&&get(7)[i+4]===50)gardeners++;
+  assert(gardeners===GARDENERS,'Viking gardeners');
   const types=[];for(let i=0;i<get(8).length;i+=20)if(get(8)[i+5]===2)types.push(get(8)[i+4]);
-  for(const t of [1,2,3,4,24,40,46])assert(types.includes(t),'Missing Viking economy building');
-  assert(get(9).length===128,'Starting tools/construction goods changed unexpectedly');
+  for(const t of [1,2,3,4,TOOLSMITH,24,40,46])assert(types.includes(t),'Missing Viking economy building');
+  assert(types.filter(t=>t===TOOLSMITH).length===1,'One Viking toolsmith');
+  assert(get(9).length===8*(SOURCE_PILES+WEAPONS.length+SHOVELS.length+TOOL_PILES.length)&&map.chunks.find(c=>c.type===9).header.readUInt32LE(20)===get(9).length/8,
+    'Starting tools/construction goods changed unexpectedly');
   for(let i=0;i<get(9).length;i+=8) {
     const x=get(9).readUInt16LE(i),y=get(9).readUInt16LE(i+2);
     assert(get(6)[4*(y*576+x)+1]===2,'Starting materials not in Viking economy');
   }
+  // Start supplies: the source piles stay the prefix (test-scenario.cjs compares them); weapon piles beside the
+  // barracks entrance, shovel piles at the start, 30 carriers after the gardeners.
+  const maskOf=t=>masks[t],starts={2:[START.x,START.y]};
+  const piles=checkPiles({N:576,land,objects:get(6),goods:get(9),from:SOURCE_PILES,byte7:pileByte7(get(9).subarray(0,8*SOURCE_PILES)),
+    buildings:get(8),maskOf,units:get(7),starts,expected:{2:[...WEAPONS,...SHOVELS,...TOOL_PILES]},totals:{2:{...TOOL_TOTALS,[GOOD.HAMMER]:2}}})[2];
+  const door=type=>{for(let i=0;i<get(8).length;i+=20)if(get(8)[i+5]===2&&get(8)[i+4]===type)
+    return [get(8).readUInt16LE(i)+masks._doors[type][0],get(8).readUInt16LE(i+2)+masks._doors[type][1]];};
+  const entrance=door(24),toolEntrance=door(TOOLSMITH);
+  for(const p of piles)assert(steps(...(p.good===GOOD.SHOVEL?[START.x,START.y]:TOOL_GOODS.has(p.good)?toolEntrance:entrance),p.x,p.y)<=16,'Supply pile away from its anchor');
+  const carriers=checkCarriers({N:576,land,objects:get(6),units:get(7),from:get(7).length/6-EXTRA_CARRIERS,owners:[2],count:EXTRA_CARRIERS,
+    buildings:get(8),maskOf,goods:get(9),starts});
   const b=get(8);let tower;
   for(let i=0;i<b.length;i+=20)if(b[i+4]===46&&b[i+5]===2)tower=b.subarray(i,i+20);
   assert(tower&&tower.readUInt16LE(0)===START.x&&tower.readUInt16LE(2)===START.y
@@ -158,6 +225,9 @@ function verifyOpponent(map,masks) {
     assert(seen.has(y*576+x),'Viking entrance disconnected from external base grass');
     assert(get(6)[4*(y*576+x)+1]===2,'Viking entrance has no owned initial economy sector');
   }
-  return {enemyUnits:units,enemyBuildings:buildings,allOutsideDarkStart:true,grassEntrancesConnected:true,allEntrancesInitiallyOwnedByViking:true,startingUnitsAndMaterialsOwnedByViking:true,ownedGrassEntrancesConnected:true};
+  return {enemyUnits:units,enemyBuildings:buildings,enemyGardeners:gardeners,enemyExtraCarriers:carriers[2],
+    weaponPiles:piles.filter(p=>p.good!==GOOD.SHOVEL&&!TOOL_GOODS.has(p.good)).length,shovelPiles:piles.filter(p=>p.good===GOOD.SHOVEL).length,
+    toolsmithEntrance:toolEntrance,toolsmithPiles:piles.filter(p=>TOOL_GOODS.has(p.good)),
+    supplyPilesOnFreeOwnedNonDarkGrass:true,allOutsideDarkStart:true,grassEntrancesConnected:true,allEntrancesInitiallyOwnedByViking:true,startingUnitsAndMaterialsOwnedByViking:true,ownedGrassEntrancesConnected:true};
 }
-module.exports={prepareOpponent,verifyOpponent,START};
+module.exports={prepareOpponent,verifyOpponent,START,GARDENERS,SOURCE_PILES,EXTRA_CARRIERS,WEAPONS,SHOVELS,TOOL_PILES};

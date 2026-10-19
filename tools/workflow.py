@@ -14,10 +14,10 @@ from pathlib import Path
 from project_paths import ROOT, game_dir, tool
 
 STEPS = ['test-game-build.py', 'inspect-united.py', 'inspect-hd-rendering.py', 'build-compat.py',
-         'build-scenario.cjs', 'test-scenario.cjs', 'test-placement.cjs', 'inspect-placement.py',
-         'inspect-placement-hints.py', 'inspect-construction.py', 'inspect-interactions.py',
+         'build-scenario.cjs', 'build-iron-kingdom.cjs', 'build-alliance.cjs', 'test-scenario.cjs', 'test-iron-kingdom.cjs', 'test-alliance.cjs', 'test-placement.cjs', 'inspect-placement.py',
+         'inspect-placement-hints.py', 'inspect-construction.py', 'inspect-offence.py', 'inspect-interactions.py',
          'inspect-recruitment.py', 'test-scenario.py', 'inspect-startup-sectors.py', 'verify-maps.cjs',
-         'build-native.py', 'stage-release.py', 'test-startup.py', 'verify-offline.py', 'load-native.py']
+         'build-native.py', 'test-diagnostics.py', 'stage-release.py', 'test-startup.py', 'verify-offline.py', 'load-native.py']
 
 
 def main():

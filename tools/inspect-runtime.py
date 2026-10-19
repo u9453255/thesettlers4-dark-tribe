@@ -36,8 +36,11 @@ def inspect(pid):
     report=dict(pid=pid,base=hex(base),executable=module.szExePath,localPlayer=u32(base+0xe9482c),setupPointer=hex(pointer))
     if pointer:
         data=read(pointer,0x340)
-        report['players']=[{hex(off):struct.unpack_from('<I',data,off+4*p)[0] for off in [0x90,0xb4,0xd8,0xfc,0x120,0x144,0x168,0x18c]} for p in range(2)]
-        report['skipFlags']=list(data[0x1b0:0x1b8]);report['playerCount']=struct.unpack_from('<I',data,0x338)[0]
+        # Nine-entry per-player arrays; the scenarios use two or four players.
+        count=struct.unpack_from('<I',data,0x338)[0]
+        report['players']=[{hex(off):struct.unpack_from('<I',data,off+4*p)[0] for off in [0x90,0xb4,0xd8,0xfc,0x120,0x144,0x168,0x18c]} for p in range(count if 2<=count<=9 else 2)]
+        report['skipFlags']=list(data[0x1b0:0x1b8]);report['playerCount']=count
+    report['mapSize']=u32(base+0xd6921c)  # diagnostics only: stale or 0 until a map loads
     context=u32(base+0x1054100)
     connection=u32(context+0xa30) if context else 0
     report['hostId']=u32(connection+0x20) if connection else 0

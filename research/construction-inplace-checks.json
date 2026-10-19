@@ -14,7 +14,7 @@
   "ordinary_completion": "RVA 0x1424C0 + 0x1429F0 when an economy exists; else pile removal mirror + phase-8 sequence",
   "reservation_rva": "0x136470 once, skipped when native phases already reserved",
   "unit_blockers": "waited for without timeout refund, as native phase 7",
-  "generated_signature_regions": 39,
+  "generated_signature_regions": 47,
   "relocation_data_copy_bases": [
     "0x400000",
     "0x360000",

@@ -1,6 +1,7 @@
 #pragma once
 #include "economy.hpp"
 #include "placement-model.hpp"
+#include "blockade-model.hpp"
 namespace dt {
 constexpr int FoundationCancelMode=1; // Refused/cancelled work only, never successful construction.
 constexpr uint32_t GrowthTicks=30; // Minimum; see growthTicks().
@@ -10,7 +11,7 @@ constexpr uint8_t NativeGrowth=1; // Previously zeroed schema-2 reserved byte.
 inline bool foundationIdentity(uint32_t uid){return uid&&!(uid&0x60000000);}
 enum class SiteSpace {Clear,MobileBlocked,StaticBlocked,Invalid};
 enum class ConstructionResult {Waiting,Complete,Retired,Refunded,Fatal};
-enum class ConstructionEvent {Unpaid,Started,StartFailed,Complete,Lost,LegacyCancelled,Blocked,UnitWait,Duplicate};
+enum class ConstructionEvent {Unpaid,Started,StartFailed,Complete,Lost,LegacyCancelled,Blocked,UnitWait,Duplicate,FireBlocked};
 // One Dark Temple (50) and one Dark Fortress (51) per player. A kind exists
 // while the player owns a completed one (not marked for deletion), or while a
 // construction job of that kind will become one (unpaid or growing). Refunded
@@ -76,11 +77,15 @@ template<class Ops> ConstructionResult updateConstruction(Construction&j,uint32_
 // the player cannot fund or that is not on Dark land (refused at discovery,
 // before future income). Only a job that will become a building is counted,
 // so of two outlines placed in the same tick the first is kept.
-template<class Ops> ConstructionResult discoverConstruction(Construction&j,uint32_t tick,Ops&ops,BuildingLimit&limit){
+// r30 blockade: a Farm inside the fire field of an own Temple/Fortress, or a
+// Temple/Fortress whose field would hold an own Farm, is refused the same way
+// (mode 1 before payment, event FireBlocked). A kept site joins the blockade.
+template<class Ops> ConstructionResult discoverConstruction(Construction&j,uint32_t tick,Ops&ops,BuildingLimit&limit,FireBlockade*fire=nullptr){
  ConstructionResult r=ConstructionResult::Waiting;
  if(limit.exists(j.kind))r=refuseConstruction(j,ops,ConstructionEvent::Duplicate);
+ else if(fire&&fire->blocked(j.kind,j.x,j.y))r=refuseConstruction(j,ops,ConstructionEvent::FireBlocked);
  else if(ops.mana()<j.cost||!ops.darkLand(j))r=updateConstruction(j,tick,ops);
- if(!j.refunded)limit.countBuilding(j.kind);
+ if(!j.refunded){limit.countBuilding(j.kind);if(fire)fire->add(j.kind,j.x,j.y);}
  return r;
 }
 }

@@ -29,7 +29,7 @@ static dt::Construction job(uint16_t kind){dt::Construction j;j.identity=100;j.s
 // Several native sites at once (two outlines placed quickly): one engine per
 // site identity, sharing the mana bank.
 struct Sites {
- uint32_t bank=1000;int charges=0,cancellations=0,duplicates=0,unpaid=0;bool dark=true;std::vector<uint32_t> gone;
+ uint32_t bank=1000;int charges=0,cancellations=0,duplicates=0,unpaid=0,fire=0;bool dark=true;std::vector<uint32_t> gone;
  bool present(uint32_t uid){return std::find(gone.begin(),gone.end(),uid)==gone.end();}
  bool sameSite(const dt::Construction&j){return present(j.identity);}
  bool foundation(const dt::Construction&j){return sameSite(j);}
@@ -43,7 +43,7 @@ struct Sites {
  dt::SiteSpace space(const dt::Construction&){return dt::SiteSpace::Clear;}
  void evict(const dt::Construction&){}
  bool finish(const dt::Construction&){return true;}
- void report(dt::ConstructionEvent e,const dt::Construction&){if(e==dt::ConstructionEvent::Duplicate)duplicates++;if(e==dt::ConstructionEvent::Unpaid)unpaid++;}
+ void report(dt::ConstructionEvent e,const dt::Construction&){if(e==dt::ConstructionEvent::Duplicate)duplicates++;if(e==dt::ConstructionEvent::Unpaid)unpaid++;if(e==dt::ConstructionEvent::FireBlocked)fire++;}
 };
 // The tick's discovery as in dark-tribe.cpp construction(): recorded jobs and
 // completed buildings first, then each new site in scan order.
@@ -51,6 +51,58 @@ static dt::BuildingLimit discover(dt::State&s,Sites&e,uint16_t built[2],std::ini
  dt::BuildingLimit l;dt::countJobs(l,s);for(int i=0;i<2;i++)for(int n=0;n<built[i];n++)l.countBuilt(i?51:50);
  for(auto site:fresh){auto&j=s.construction[s.constructionCount++];j=job(site.second);j.identity=site.first;j.site=(uint16_t)site.first;dt::discoverConstruction(j,tick,e,l);}
  return l;
+}
+// r30 citadel fire blockade: geometry, both directions, discovery refusal
+// before payment, same-tick order and player texts.
+static dt::Construction site(uint32_t uid,uint16_t kind,int x,int y){dt::Construction j;j.identity=uid;j.site=(uint16_t)uid;j.kind=kind;j.cost=dt::buildCost(kind);j.x=(uint16_t)x;j.y=(uint16_t)y;return j;}
+static void fireBlockade(){
+ using dtfire::FarmLock;static_assert(FarmLock==33&&dtfire::FireLine==27&&dtfire::FarmReach==4,"blockade shares the offence farm lock");
+ const int bx=300,by=300,cx=bx+1,cy=by+2; /* Temple position; fire centre = position + (1,2) */
+ dt::FireBlockade b;b.add(50,bx,by);
+ // Euclidean on the axial grid, strict: fire2 < 33*33 is blocked.
+ assert(b.blocked(49,cx+32,cy)&&!b.blocked(49,cx+33,cy)&&b.blocked(49,cx-32,cy)&&!b.blocked(49,cx-33,cy));
+ assert(b.blocked(49,cx,cy+32)&&!b.blocked(49,cx,cy+33)&&b.blocked(49,cx+32,cy+32)&&!b.blocked(49,cx+33,cy+33));
+ // Between the axes (2k,k): Euclid sqrt(3)k; hex distance 2k overstates it. k=19 (hex 38, Euclid 32.9) is blocked, k=20 (34.6) is not.
+ assert(dtfire::fire2(cx+38,cy+19,cx,cy)==1083&&b.blocked(49,cx+38,cy+19)&&!b.blocked(49,cx+40,cy+20));
+ assert(b.blocked(49,bx,by)&&b.farmBlocker(cx+10,cy)==&b.citadels[0]&&!b.farmBlocker(cx+40,cy));
+ // Only farms are blocked by citadels; the Hall (80) has no fire and is never blocked; a citadel alone blocks no citadel.
+ assert(!b.blocked(80,cx,cy)&&!b.blocked(51,cx+5,cy)&&!b.blocked(50,cx,cy)&&!b.blocked(0,cx,cy));
+ // Fortress fire too, and every cell of a full disc agrees with farmTooClose.
+ {dt::FireBlockade f;f.add(51,100,100);assert(f.blocked(49,101+32,102)&&!f.blocked(49,101+33,102));unsigned cells=0;
+  for(int y=0;y<200;y++)for(int x=0;x<200;x++){bool in=f.blocked(49,x,y);assert(in==dtfire::farmTooClose(x,y,100,100));if(in)cells++;}
+  assert(cells==3943);} /* hex cells with dx*dx-dx*dy+dy*dy < 33*33 (pi*33^2/0.866 is about 3,950) */
+ // The other direction: a Temple/Fortress is blocked by any own farm its field would hold.
+ {dt::FireBlockade f;f.add(49,cx+20,cy);assert(f.blocked(50,bx,by)&&f.blocked(51,bx,by)&&!f.blocked(80,bx,by)&&!f.blocked(49,bx,by));
+  assert(!f.blocked(50,bx-14,by)&&f.blocked(50,bx-12,by)); /* farm at centre+(20,0): Temple 33 or more to the left is free */
+  for(int dy=-40;dy<=40;dy++)for(int dx=-40;dx<=40;dx++){dt::FireBlockade t;t.add(50,bx+dx,by+dy);assert(t.blocked(49,cx+20,cy)==f.blocked(50,bx+dx,by+dy));}}
+ // Snapshot equality ignores scan order.
+ {dt::FireBlockade a,c;a.add(49,1,2);a.add(49,3,1);a.add(51,9,9);c.add(51,9,9);c.add(49,3,1);c.add(49,1,2);assert(a!=c);a.normalize();c.normalize();assert(a==c);c.add(80,5,5);assert(a==c);c.add(49,5,5);assert(a!=c);}
+ // Player texts: short, no coordinates or internals.
+ for(int k:{49,50,51}){const char*t=dt::fireNotice(k);assert(t[0]&&strlen(t)<100);for(const char*q=t;*q;q++)assert(*q<'0'||*q>'9');}
+ assert(!dt::fireNotice(80)[0]&&!dt::fireNotice(0)[0]);
+ // Discovery: a Farm site inside a Temple field is cancelled with mode 1 before payment and never charged, counted or rediscovered.
+ {dt::State s;Sites e;dt::BuildingLimit l;dt::FireBlockade f;f.add(50,bx,by);
+  auto&in=s.construction[s.constructionCount++];in=site(100,49,cx+20,cy);dt::discoverConstruction(in,10,e,l,&f);
+  assert(in.refunded&&in.removed&&in.cancelRequested&&!in.pad&&e.fire==1&&e.cancellations==1&&e.bank==1000&&!e.charges&&f.farms.empty());
+  assert(dt::updateConstruction(in,11,e)==Result::Retired&&!e.charges&&dt::valid(s));
+  auto&out=s.construction[s.constructionCount++];out=site(101,49,cx+40,cy);dt::discoverConstruction(out,10,e,l,&f);
+  assert(!out.refunded&&e.fire==1&&f.farms.size()==1&&f.farms[0].x==cx+40);
+  assert(dt::updateConstruction(out,10,e)==Result::Waiting&&e.charges==1); /* paid as before */
+  // The kept farm site now blocks a Temple/Fortress whose field would hold it; a far Fortress is kept and joins the blockade.
+  auto&t=s.construction[s.constructionCount++];t=site(102,51,cx+40,cy+5);dt::discoverConstruction(t,10,e,l,&f);assert(t.refunded&&e.fire==2&&!l.exists(51));
+  auto&distant=s.construction[s.constructionCount++];distant=site(103,51,cx+120,cy);dt::discoverConstruction(distant,10,e,l,&f);assert(!distant.refunded&&l.exists(51)&&f.citadels.size()==2);
+  // ... and that Fortress's field now refuses farms next to it.
+  auto&near2=s.construction[s.constructionCount++];near2=site(104,49,cx+110,cy);dt::discoverConstruction(near2,10,e,l,&f);assert(near2.refunded&&e.fire==3);
+  // A second Temple is a Duplicate first (one notice), even inside the field.
+  dt::BuildingLimit one;one.countBuilt(50);auto&dup=s.construction[s.constructionCount++];dup=site(105,50,bx,by);dt::discoverConstruction(dup,10,e,one,&f);assert(dup.refunded&&e.duplicates==1&&e.fire==3);
+  assert(dt::valid(s));}
+ // Without a blockade (old call form) nothing changes.
+ {dt::State s;Sites e;dt::BuildingLimit l;auto&j=s.construction[s.constructionCount++];j=site(100,49,cx,cy);dt::discoverConstruction(j,10,e,l);assert(!j.refunded&&!e.fire);}
+ // Same tick, citadel first (as construction() orders new sites): the Temple is kept, the farm beside it refused.
+ {dt::State s;Sites e;dt::BuildingLimit l;dt::FireBlockade f;
+  auto&t=s.construction[s.constructionCount++];t=site(100,50,bx,by);dt::discoverConstruction(t,10,e,l,&f);
+  auto&m=s.construction[s.constructionCount++];m=site(101,49,cx+3,cy+20);dt::discoverConstruction(m,10,e,l,&f);
+  assert(!t.refunded&&m.refunded&&e.fire==1&&l.exists(50));}
 }
 static void limits(){
  using dt::LimitFree;using dt::LimitBuilt;using dt::LimitBuilding;
@@ -154,6 +206,8 @@ int main(){
  st.construction[0].pad=1;st.construction[0].cancelRequested=1;assert(!dt::valid(st));
  st.construction[0].refunded=1;assert(dt::valid(st));
  limits();
+ fireBlockade();
  puts("PASS: all four in-place constructions keep their site identity, wait for units without timeout refunds, single refunds/cancellation for static or lost sites, unpaid and legacy jobs never recreated, fatal transaction/completion failures");
  puts("PASS: one Dark Temple and one Dark Fortress: built, site and pending jobs count, refunded/lost do not, a second site (also two in one tick) is cancelled before payment");
+ puts("PASS: citadel fire blockade (r30): no Farm within Euclid 33 of a Temple/Fortress fire centre, no citadel whose field would hold a Farm, refused before payment, Hall never blocked");
 }

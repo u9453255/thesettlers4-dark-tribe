@@ -1,0 +1,208 @@
+{
+  "version": "0.2.15",
+  "scenario": "iron_kingdom",
+  "source": "C:\\Projects\\thesettlers4\\Map\\Campaign\\AO_trojan10.map",
+  "source_sha256": "05f34cbb22aad2e8e390cf9f3d38dcd13e3513d69ccfa6f54c67450fc0b7b122",
+  "output": "C:\\Projects\\thesettlers4-dark-tribe\\work\\generated\\Map\\User\\DarkTribe_IronKingdom.map",
+  "output_sha256": "a3648d815064a1ce68a7e38ae82c9426e2ad71a9476814c30f38f9188d506ed0",
+  "changedChunks": [
+    2,
+    1,
+    3,
+    7,
+    8,
+    9,
+    6,
+    13,
+    16,
+    11,
+    14,
+    12,
+    15
+  ],
+  "darkStart": {
+    "x": 378,
+    "y": 134
+  },
+  "vikingStart": {
+    "x": 475,
+    "y": 353
+  },
+  "darkUnits": 156,
+  "darkBuildings": 12,
+  "vikingUnits": 161,
+  "vikingBuildings": 83,
+  "garrisonedTowers": 17,
+  "fieldArmy": 24,
+  "gardeners": 8,
+  "gardenerCells": [
+    [
+      473,
+      350
+    ],
+    [
+      474,
+      350
+    ],
+    [
+      475,
+      350
+    ],
+    [
+      476,
+      350
+    ],
+    [
+      477,
+      350
+    ],
+    [
+      478,
+      350
+    ],
+    [
+      472,
+      351
+    ],
+    [
+      478,
+      351
+    ]
+  ],
+  "relocatedVikingUnits": 1,
+  "vikingGoods": 26,
+  "sourceVikingGoods": 16,
+  "removedTrojanGoods": 24,
+  "barracks": {
+    "type": 24,
+    "x": 441,
+    "y": 358,
+    "entrance": [
+      439,
+      360
+    ],
+    "objectsCleared": 0,
+    "ground": {
+      "levelled": "footprint",
+      "height": 3,
+      "originalSpan": 10,
+      "groundSpan": 11,
+      "maxSpan": 4,
+      "flatRadius": 8,
+      "cells": 112,
+      "heightsChanged": 102,
+      "shadingsChanged": 105,
+      "step": 9,
+      "authoredStep": 12,
+      "authoredBuildings": 84,
+      "searchRing": 0
+    }
+  },
+  "weaponPiles": [
+    {
+      "good": 34,
+      "amount": 8,
+      "x": 472,
+      "y": 352
+    },
+    {
+      "good": 34,
+      "amount": 8,
+      "x": 478,
+      "y": 353
+    },
+    {
+      "good": 8,
+      "amount": 8,
+      "x": 478,
+      "y": 355
+    },
+    {
+      "good": 5,
+      "amount": 8,
+      "x": 477,
+      "y": 356
+    }
+  ],
+  "shovelPiles": [
+    {
+      "good": 31,
+      "amount": 8,
+      "x": 471,
+      "y": 349
+    },
+    {
+      "good": 31,
+      "amount": 8,
+      "x": 473,
+      "y": 349
+    }
+  ],
+  "toolsmith": {
+    "x": 523,
+    "y": 463,
+    "entrance": [
+      524,
+      465
+    ]
+  },
+  "toolsmithPiles": [
+    {
+      "good": 20,
+      "amount": 8,
+      "x": 529,
+      "y": 465
+    },
+    {
+      "good": 20,
+      "amount": 8,
+      "x": 518,
+      "y": 459
+    },
+    {
+      "good": 10,
+      "amount": 8,
+      "x": 530,
+      "y": 467
+    },
+    {
+      "good": 10,
+      "amount": 8,
+      "x": 530,
+      "y": 469
+    }
+  ],
+  "extraCarriers": 0,
+  "fireCleanStart": {
+    "farmLock": 33,
+    "removedFarms": [
+      {
+        "index": 50,
+        "x": 391,
+        "y": 124,
+        "owner": 1,
+        "citadel": {
+          "type": 50,
+          "x": 387,
+          "y": 133
+        },
+        "euclid": 12.77,
+        "flagCellsCleared": 52
+      },
+      {
+        "index": 66,
+        "x": 413,
+        "y": 161,
+        "owner": 1,
+        "citadel": {
+          "type": 50,
+          "x": 387,
+          "y": 133
+        },
+        "euclid": 25.51,
+        "flagCellsCleared": 52
+      }
+    ]
+  },
+  "runtimeVerified": false
+}

@@ -3,13 +3,14 @@
   "source": "C:\\Projects\\thesettlers4\\Map\\Campaign\\dark03.map",
   "source_sha256": "237a1df871a31818e00496a8b1b802cb414902136657aeb5e10561c11ec854fb",
   "output": "C:\\Projects\\thesettlers4-dark-tribe\\work\\generated\\Map\\User\\DarkTribe_FirstDawn.map",
-  "output_sha256": "24c53a148039cd1282db5e69bd71b8aa6e6d11e9acecb998ab26656c88353895",
+  "output_sha256": "4ffde2dc728fd8ff00c9575dc4138111340fdf6e857239cd1890e501f8b1ba90",
   "changedChunks": [
     2,
     7,
     8,
     13,
     6,
+    9,
     16,
     11,
     14,
@@ -20,9 +21,27 @@
   "playerRecordBytes": 45,
   "unitRecordBytes": 6,
   "buildingRecordBytes": 20,
-  "farms": 8,
+  "farms": 7,
   "temples": 1,
-  "opponentRevision": 2,
+  "fireCleanStart": {
+    "farmLock": 33,
+    "removedFarms": [
+      {
+        "index": 2,
+        "x": 337,
+        "y": 282,
+        "owner": 1,
+        "citadel": {
+          "type": 50,
+          "x": 340,
+          "y": 300
+        },
+        "euclid": 18.33,
+        "flagCellsCleared": 52
+      }
+    ]
+  },
+  "opponentRevision": 3,
   "opponent": {
     "start": {
       "x": 75,
@@ -30,6 +49,130 @@
     },
     "relocatedUnits": 9,
     "startingCarriersAdded": 24,
+    "startingGardenersAdded": 6,
+    "extraCarriersAdded": 30,
+    "extraCarrierCells": [
+      [
+        68,
+        433
+      ],
+      [
+        60,
+        434
+      ],
+      [
+        61,
+        434
+      ],
+      [
+        63,
+        434
+      ],
+      [
+        64,
+        434
+      ],
+      [
+        65,
+        434
+      ],
+      [
+        66,
+        434
+      ],
+      [
+        67,
+        434
+      ],
+      [
+        61,
+        435
+      ],
+      [
+        62,
+        435
+      ],
+      [
+        63,
+        435
+      ],
+      [
+        64,
+        435
+      ],
+      [
+        65,
+        435
+      ],
+      [
+        60,
+        436
+      ],
+      [
+        61,
+        436
+      ],
+      [
+        64,
+        436
+      ],
+      [
+        59,
+        437
+      ],
+      [
+        61,
+        437
+      ],
+      [
+        63,
+        437
+      ],
+      [
+        60,
+        438
+      ],
+      [
+        61,
+        438
+      ],
+      [
+        62,
+        438
+      ],
+      [
+        64,
+        438
+      ],
+      [
+        59,
+        439
+      ],
+      [
+        61,
+        439
+      ],
+      [
+        63,
+        439
+      ],
+      [
+        58,
+        440
+      ],
+      [
+        60,
+        440
+      ],
+      [
+        61,
+        440
+      ],
+      [
+        62,
+        440
+      ]
+    ],
     "territoryTiles": 4609,
     "addedBuildings": [
       {
@@ -72,11 +215,150 @@
         "x": 96,
         "y": 442
       }
+    ],
+    "barracksEntrance": [
+      94,
+      444
+    ],
+    "weaponPiles": [
+      {
+        "good": 34,
+        "amount": 8,
+        "x": 89,
+        "y": 439
+      },
+      {
+        "good": 34,
+        "amount": 8,
+        "x": 89,
+        "y": 441
+      },
+      {
+        "good": 34,
+        "amount": 8,
+        "x": 89,
+        "y": 443
+      },
+      {
+        "good": 8,
+        "amount": 8,
+        "x": 95,
+        "y": 450
+      },
+      {
+        "good": 8,
+        "amount": 8,
+        "x": 97,
+        "y": 450
+      },
+      {
+        "good": 5,
+        "amount": 8,
+        "x": 87,
+        "y": 437
+      }
+    ],
+    "shovelPiles": [
+      {
+        "good": 31,
+        "amount": 8,
+        "x": 70,
+        "y": 396
+      },
+      {
+        "good": 31,
+        "amount": 8,
+        "x": 70,
+        "y": 398
+      }
+    ],
+    "toolsmith": {
+      "x": 114,
+      "y": 440,
+      "entrance": [
+        115,
+        442
+      ],
+      "step": 9,
+      "maxStep": 24
+    },
+    "toolsmithPiles": [
+      {
+        "good": 20,
+        "amount": 8,
+        "x": 120,
+        "y": 442
+      },
+      {
+        "good": 20,
+        "amount": 8,
+        "x": 109,
+        "y": 436
+      },
+      {
+        "good": 10,
+        "amount": 8,
+        "x": 121,
+        "y": 444
+      },
+      {
+        "good": 10,
+        "amount": 8,
+        "x": 121,
+        "y": 446
+      },
+      {
+        "good": 18,
+        "amount": 2,
+        "x": 120,
+        "y": 448
+      }
     ]
   },
   "opponentChecks": {
-    "enemyUnits": 68,
-    "enemyBuildings": 10,
+    "enemyUnits": 104,
+    "enemyBuildings": 11,
+    "enemyGardeners": 6,
+    "enemyExtraCarriers": 30,
+    "weaponPiles": 6,
+    "shovelPiles": 2,
+    "toolsmithEntrance": [
+      115,
+      442
+    ],
+    "toolsmithPiles": [
+      {
+        "good": 20,
+        "amount": 8,
+        "x": 120,
+        "y": 442
+      },
+      {
+        "good": 20,
+        "amount": 8,
+        "x": 109,
+        "y": 436
+      },
+      {
+        "good": 10,
+        "amount": 8,
+        "x": 121,
+        "y": 444
+      },
+      {
+        "good": 10,
+        "amount": 8,
+        "x": 121,
+        "y": 446
+      },
+      {
+        "good": 18,
+        "amount": 2,
+        "x": 120,
+        "y": 448
+      }
+    ],
+    "supplyPilesOnFreeOwnedNonDarkGrass": true,
     "allOutsideDarkStart": true,
     "grassEntrancesConnected": true,
     "allEntrancesInitiallyOwnedByViking": true,

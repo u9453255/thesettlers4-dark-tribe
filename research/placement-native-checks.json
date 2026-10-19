@@ -8,6 +8,8 @@
   "native_flags_mask": "0x5F",
   "required_masked_flags": 4,
   "discarded_map_flags_on_explicitly_prepared_terrain": "0x43",
+  "map_stride_rva": "0x1054138",
+  "view_map_size_rva": "0xD6921C (copied from the stride at 0x2589D0)",
   "retained_owner_and_resources": true,
   "gameplay_placement_verified": false
 }

@@ -21,7 +21,11 @@
 #include "placement-native.hpp"
 #include "construction-model.hpp"
 #include "construction-native.hpp"
+#include "offence-native.hpp"
+#include "scenario-model.hpp"
+#include "map-size.hpp"
 #include "footprints.hpp"
+#include "diagnostics.hpp"
 static S4API api=nullptr;static uintptr_t image=0;static HMODULE ownModule=0;
 static SRWLOCK stateLock=SRWLOCK_INIT,commandLock=SRWLOCK_INIT,ioLock=SRWLOCK_INIT;
 using HDBool=BOOL(__stdcall*)();static HDBool hdIsActive=nullptr,hdMouseBlocked=nullptr;
@@ -71,13 +75,17 @@ static bool isSite(uint16_t id){auto*r=role(id);auto n=rtti(peek<uintptr_t>((uin
 static bool aircraft(uint16_t id){auto*p=entity(id);return p&&p[10]==0x40&&readable(p,0x88)&&owned(id)&&strstr(rtti(peek<uintptr_t>((uintptr_t)p)),"CManakopter@@");}
 static uint16_t selected(){uintptr_t a=peek<uintptr_t>(image+0x10865a4),b=peek<uintptr_t>(image+0x10865a8);return b==a+2?peek<uint16_t>(a):0;}
 static uint32_t mana(){return peek<uint32_t>(image+0x109b7fc+0x8c)^0x27356334;}
-// Preserve exact legacy save layout; new scenarios use the external Viking tower start.
+// Side length of the running map (0 without a supported map); see map-size.hpp.
+static int side(){return dtmap::size(image);}
+// Accepted scenario layouts (including the legacy First Dawn save layout) are in scenario-model.hpp.
 static void log(const char*s);
 // Scene fingerprint; each failed part sets one bit so transitions can be logged.
-static unsigned signatureMask(){if(!image)return 1;uintptr_t p=peek<uintptr_t>(image+0xe968a0);uint32_t ax=peek<uint32_t>(p+0x100),ay=peek<uint32_t>(p+0x124);bool opponent=(ax==75&&ay==401)||(ax==261&&ay==279);unsigned m=0;
- if(peek<uint32_t>(image+0xe9482c)!=1)m|=2;if(peek<uint32_t>(image+0xd6921c)!=576)m|=4;if(!p){m|=8;return m;}
- if(peek<uint32_t>(p+0x338)!=2)m|=16;if(peek<uint32_t>(p+0x90)!=0||peek<uint32_t>(p+0x94)!=1)m|=32;if(peek<uint32_t>(p+0x18c)!=3||peek<uint32_t>(p+0x190)!=1)m|=64;
- if(peek<uint32_t>(p+0xfc)!=277||peek<uint32_t>(p+0x120)!=214)m|=128;if(!opponent)m|=256;if(!api->IsCurrentlyOnScreen(S4_SCREEN_INGAME))m|=512;return m;}
+static unsigned signatureMask(){if(!image)return 1;uintptr_t p=peek<uintptr_t>(image+0xe968a0);unsigned m=0;
+ if(peek<uint32_t>(image+0xe9482c)!=1)m|=2;if(!p||!readable((void*)p,0x33c)){m|=8;return m;}
+ /* One readable check for the whole setup block, then plain copies of its per-player arrays. */
+ dt::Setup s;s.size=peek<uint32_t>(image+0xd6921c);memcpy(&s.players,(void*)(p+0x338),4);
+ memcpy(s.slot,(void*)(p+0x90),sizeof(s.slot));memcpy(s.race,(void*)(p+0x18c),sizeof(s.race));memcpy(s.x,(void*)(p+0xfc),sizeof(s.x));memcpy(s.y,(void*)(p+0x120),sizeof(s.y));
+ m|=dt::sceneMask(s);if(!api->IsCurrentlyOnScreen(S4_SCREEN_INGAME))m|=512;return m;}
 static std::atomic<unsigned> lastSceneMask(0xffffffff);
 static bool signature(){unsigned m=signatureMask();if(m!=lastSceneMask.exchange(m)&&nativeTick.load()){char line[120];snprintf(line,sizeof(line),"SCENE_STATE mask=%03x (2 player,4 map,8 data,16 players,32 slots,64 races,128 start,256 opponent,512 not-ingame)",m);log(line);}return m==0;}
 // The game's own screen state ("in a running map"), refreshed by the frame
@@ -90,7 +98,8 @@ static bool inGame(){uint64_t now=GetTickCount64(),f=frameAt.load(),t=tickAt.loa
 static std::atomic<uint64_t> noticeAt{0};constexpr uint64_t NoticeMs=6000;
 static void say(const char*s){strncpy(notice,s,sizeof(notice)-1);notice[sizeof(notice)-1]=0;noticeAt=s[0]?GetTickCount64():0;} /* failures only; shown for NoticeMs */
 static void log(const char*s){char path[MAX_PATH];snprintf(path,sizeof(path),"%s/evidence/v02-runtime.log",root);FILE*f=fopen(path,"a");if(f){fprintf(f,"%lu pid=%lu tick=%u %s\n",GetTickCount(),GetCurrentProcessId(),nativeTick.load(),s);fclose(f);}}
-static LONG WINAPI exceptionTrace(EXCEPTION_POINTERS*p){DWORD code=p->ExceptionRecord->ExceptionCode;if(code!=EXCEPTION_ACCESS_VIOLATION&&code!=EXCEPTION_INT_DIVIDE_BY_ZERO&&code!=EXCEPTION_ILLEGAL_INSTRUCTION)return EXCEPTION_CONTINUE_SEARCH;static std::atomic<int> count(0);if(count++<32){char msg[240];uintptr_t at=(uintptr_t)p->ExceptionRecord->ExceptionAddress;snprintf(msg,sizeof(msg),"FIRST_CHANCE code=%08lx address=%08lx gameRva=%08lx operation=%s",code,(unsigned long)at,(unsigned long)(at-image),operation.load());log(msg);}return EXCEPTION_CONTINUE_SEARCH;}
+// First-chance faults and fatal exceptions with a stack; heap-free (diagnostics.hpp).
+static LONG WINAPI exceptionTrace(EXCEPTION_POINTERS*p){dtdiag::exception(p);return EXCEPTION_CONTINUE_SEARCH;}
 static bool changeMana(int amount){uint32_t before=mana(),after=0;if(!dt::manaTarget(before,amount,after))return false;incomeBypass=true;BOOL ok=api->MagicIncreaseMana(amount,1);incomeBypass=false;if(!ok||mana()!=after){fatal=true;running=false;log("Native mana transaction failed; economy disabled");return false;}return true;}
 static bool enqueue(Command c){if(!TryAcquireSRWLockExclusive(&commandLock))return false;bool ok=commands.size()<128;if(ok)commands.push_back(std::move(c));ReleaseSRWLockExclusive(&commandLock);return ok;}
 static bool constructionMenu(){return api->IsCurrentlyOnScreen(S4_MENU_BUILDINGS_FOUNDATION)||api->IsCurrentlyOnScreen(S4_MENU_BUILDINGS_METAL)||api->IsCurrentlyOnScreen(S4_MENU_BUILDINGS_FOOD)||api->IsCurrentlyOnScreen(S4_MENU_BUILDINGS_MISC)||api->IsCurrentlyOnScreen(S4_MENU_BUILDINGS_MISC_DECOSUB)||api->IsCurrentlyOnScreen(S4_MENU_BUILDINGS_MILITARY);}
@@ -107,12 +116,15 @@ static bool nativeConstructionIntact(){
  return !memcmp((void*)(image+0x1c5edf),expected,sizeof(expected));
 }
 static void position(uint16_t id,int&x,int&y){auto*p=entity(id);x=p?peek<uint16_t>((uintptr_t)p+24):0;y=p?peek<uint16_t>((uintptr_t)p+26):0;}
-static bool freePoint(int x,int y){if(x<1||y<1||x>=575||y>=575)return false;BYTE*ground=peek<BYTE*>(image+0x11630dc);return readable(ground,576*576*2)&&!peek<uint16_t>((uintptr_t)ground+2*(y*576+x))&&!api->LandscapeIsOccupied(x,y)&&!api->LandscapeGetObject(x,y)&&api->LandscapeGetType(x,y)>=16&&api->LandscapeGetType(x,y)<96;}
+static bool freePoint(int x,int y){int n=side();if(!n||x<1||y<1||x>=n-1||y>=n-1)return false;BYTE*ground=peek<BYTE*>(image+0x11630dc);return readable(ground,(size_t)n*n*2)&&!peek<uint16_t>((uintptr_t)ground+2*(y*n+x))&&!api->LandscapeIsOccupied(x,y)&&!api->LandscapeGetObject(x,y)&&api->LandscapeGetType(x,y)>=16&&api->LandscapeGetType(x,y)<96;}
 static bool exitPoint(uint16_t id,int&x,int&y){position(id,x,y);int dx=kind(id)==49?3:-1,dy=kind(id)==49?1:8;int cx=x+dx,cy=y+dy;for(int radius=0;radius<=10;radius++)for(int iy=-radius;iy<=radius;iy++)for(int ix=-radius;ix<=radius;ix++)if((abs(ix)==radius||abs(iy)==radius)&&freePoint(cx+ix,cy+iy)){x=cx+ix;y=cy+iy;return true;}return false;}
 // Mod-issued moves must not be read as player orders by the send callback.
 static std::atomic<bool> internalSend(false);
 static void move(uint16_t id,int x,int y){internalSend=true;api->SendWarriors(x,y,S4_MOVEMENT_FORWARD,&id,1,1);internalSend=false;dtmem::invalidate();}
-static uint16_t nearestBase(int x,int y){uint16_t out=0;int best=0x7fffffff;for(uint32_t id=1;id<65536;id++){auto*p=entity((uint16_t)id);if(!p||p[10]!=8||!owned((uint16_t)id)||isSite((uint16_t)id)||(kind((uint16_t)id)!=50&&kind((uint16_t)id)!=51))continue;int a,b;position((uint16_t)id,a,b);int d=abs(x-a)+abs(y-b);if(d<best){best=d;out=(uint16_t)id;}}return out;}
+// Not destroyed: the native removal (RVA 0x16D030) marks the UID and flag
+// 0x4000000 at once, but the entity stays readable until the deferred delete.
+static bool standing(uint16_t id){auto*p=entity(id);return p&&dt::foundationIdentity(identity(id))&&!(peek<uint32_t>((uintptr_t)p+0x14)&0x4000000);}
+static uint16_t nearestBase(int x,int y){uint16_t out=0;int best=0x7fffffff;for(uint32_t id=1;id<65536;id++){auto*p=entity((uint16_t)id);if(!p||p[10]!=8||!owned((uint16_t)id)||!standing((uint16_t)id)||isSite((uint16_t)id)||(kind((uint16_t)id)!=50&&kind((uint16_t)id)!=51))continue;int a,b;position((uint16_t)id,a,b);int d=abs(x-a)+abs(y-b);if(d<best){best=d;out=(uint16_t)id;}}return out;}
 static bool knownSite(uint16_t id){for(uint32_t i=0;i<state.constructionCount;i++)if(state.construction[i].site==id&&state.construction[i].identity==identity(id))return true;return false;}
 static bool landed(uint16_t id);static void cancelBoarding(uint16_t craft);static bool flight(uint16_t id,uint32_t uid,int x,int y);
 struct ConstructionOps {
@@ -131,6 +143,7 @@ struct ConstructionOps {
  bool progress(const dt::Construction&j,uint32_t t){return nativeConstruction.progress(j,t);}
  bool completed(const dt::Construction&j){return nativeConstruction.completed(j);}
  dtconstruction::Native::Block lastBlock; // Captured at the decision, before any refund/cancellation.
+ bool start=false; // r30: the new-map tick; a farm site refused by the fire blockade is a start-map farm (no notice).
  dt::SiteSpace space(const dt::Construction&j){lastBlock={};return nativeConstruction.space(j,true,&lastBlock);}
  // Order own idle units off the reserved building (+1 tile margin) to the
  // nearest free tile, as a player would. Never moves other players' units,
@@ -165,6 +178,7 @@ struct ConstructionOps {
    case dt::ConstructionEvent::Blocked:label="static obstruction; refunded once";say("Building site blocked. Mana refunded.");break;
    case dt::ConstructionEvent::UnitWait:label="waiting for units to clear native blocking shape; no timeout refund";say("Waiting for units to leave the building site.");break;
    case dt::ConstructionEvent::Duplicate:label="second Temple/Fortress refused before payment (one of each); not charged";say(dt::limitNotice(j.kind));break;
+   case dt::ConstructionEvent::FireBlocked:label=start?"start-map site inside the citadel fire field; cancelled before payment":"inside the citadel fire field (Farm vs Temple/Fortress); refused before payment";if(start){char line[160];snprintf(line,sizeof(line),"FARM_FIRE_REMOVED %u,%u reason=start site inside the citadel fire field site=%u kind=%u",j.x,j.y,j.site,j.kind);log(line);}else say(dt::fireNotice(j.kind));break;
   }
   dtconstruction::Native::Block why=lastBlock;
   if(event==dt::ConstructionEvent::Blocked||event==dt::ConstructionEvent::UnitWait||event==dt::ConstructionEvent::StartFailed){if(event==dt::ConstructionEvent::StartFailed)why=nativeConstruction.lastStart();BYTE*e=why.id?entity(why.id):nullptr;char msg[260];snprintf(msg,sizeof(msg),"GROW_BLOCK kind=%u reason=%s tile=%d,%d entity=%u cls=%u owner=%02x flags=%08lx type=%u aircraft=%d",j.kind,why.reason,why.x,why.y,why.id,e?e[10]:0,e?e[32]:0,e?(unsigned long)peek<uint32_t>((uintptr_t)e+0x14):0ul,e?kind(why.id):0,(int)(why.id&&aircraft(why.id)));log(msg);}
@@ -176,30 +190,69 @@ struct ConstructionOps {
 // read by command 1 and the construction tiles.
 static dt::BuildingLimit buildingLimit;
 static_assert(dtui::TileBuilt==dt::LimitBuilt&&dtui::TileBuilding==dt::LimitBuilding,"tile states follow the limit model");
+// r30 citadel fire blockade (blockade-model.hpp, citadel-fire.hpp): own
+// Temple/Fortress and Mushroom Farm positions, completed or site, rebuilt every
+// tick inside the same discovery scan. Discovery refuses blocked sites; the
+// placement hints never mark a blocked anchor. Transient, never saved.
+static dt::FireBlockade fireBlockade;
+// Set by initialize() on a new map only (never on a restored save): the next
+// construction() pass removes start-map farms inside a citadel fire field once.
+static bool fireStartPending=false;
+// r30 review: set by initialize() on a restored save. A save made before r30
+// (no blockade yet) can hold a farm inside a citadel fire field, which the
+// computers never take (offence locks it) while it keeps the fire on, so the
+// Temple/Fortress could never fall. The next construction() pass removes such
+// farms once, silently, logged with reason=load. An r30 save holds none (the
+// blockade refuses them), so the pass is idempotent without a schema change.
+static bool fireLoadPending=false;
+// Start-map farms inside a fire field: the player's own demolition path (Lua
+// Buildings.CrushBuilding -> mode-1 removal 0x136960 -> Kill 0x16D030(id,0)
+// -> CBuilding slot 4 0x1361D0 -> 0x13C680, which decrements the ready-farm
+// counter at once). Attacker 0 and farm byte +0x25 = 0: no computer is credited.
+static bool fireSweep(std::vector<uint16_t>&farms,dt::FireBlockade&fire,bool load){
+ bool removed=false;
+ for(auto id:farms){int x,y;position(id,x,y);auto*by=fire.farmBlocker(x,y);if(!by){fire.add(49,x,y);continue;}
+  int bx=by->x,by2=by->y;operation=load?"BuildingsCrush loaded farm in citadel fire":"BuildingsCrush start farm in citadel fire";BOOL accepted=api->BuildingsCrush(id);operation="idle";dtmem::invalidate();bool gone=!standing(id);if(!gone)fire.add(49,x,y);removed=removed||gone;
+  char line[200];snprintf(line,sizeof(line),"FARM_FIRE_REMOVED %d,%d reason=%s farm inside the citadel fire field farm=%u citadel=%d,%d crushAccepted=%u gone=%u",x,y,load?"load":"start",id,bx,by2,(unsigned)accepted,(unsigned)gone);log(line);}
+ return removed;
+}
 static void construction(uint32_t t){
  ConstructionOps ops;dt::BuildingLimit limit;dt::countJobs(limit,state);uint16_t fresh[64];unsigned freshCount=0;
+ dt::FireBlockade fire;std::vector<uint16_t> farms;bool start=fireStartPending,load=fireLoadPending&&!start;fireStartPending=false;fireLoadPending=false;ops.start=start;
  for(uint32_t id=1;id<65536;id++){
   auto*p=entity((uint16_t)id);if(!p||p[10]!=8||p[32]!=0x13||!dt::foundationIdentity(identity((uint16_t)id)))continue;
   // Completed Temple/Fortress. Native removal (demolish/Lua crush, delete
   // modes 1/2, destruction) marks the UID 0x20000000 and flag 0x4000000 at
   // once (RVA 0x16D030), so a lost base stops counting on the next tick.
-  if(!isSite((uint16_t)id)){uint16_t k=kind((uint16_t)id);if(dt::limitSlot(k)>=0&&!(peek<uint32_t>((uintptr_t)p+0x14)&0x4000000))limit.countBuilt(k);continue;}
+  if(!isSite((uint16_t)id)){uint16_t k=kind((uint16_t)id);if(dt::limitSlot(k)>=0&&!(peek<uint32_t>((uintptr_t)p+0x14)&0x4000000))limit.countBuilt(k);if((k==49||dt::citadelKind(k))&&standing((uint16_t)id)){int x,y;position((uint16_t)id,x,y);if(k==49)farms.push_back((uint16_t)id);else fire.add(k,x,y);}continue;}
   if(!knownSite((uint16_t)id)&&freshCount<64)fresh[freshCount++]=(uint16_t)id; // Any further ones are found on the next tick.
  }
- for(unsigned f=0;f<freshCount;f++){
-  uint16_t id=fresh[f];uint16_t type=kind(id);uint32_t cost=dt::buildCost(type);int x,y;position(id,x,y);
+ // Recorded jobs that will become buildings (growing sites) join the blockade.
+ for(uint32_t i=0;i<state.constructionCount&&i<dt::MaxJobs;i++)if(!state.construction[i].refunded)fire.add(state.construction[i].kind,state.construction[i].x,state.construction[i].y);
+ // Completed farms block new Temple/Fortress sites, except on the new-map tick
+ // and the first tick after a load, where a citadel wins and the farms inside
+ // its field are removed instead.
+ if(!start&&!load)for(auto id:farms){int x,y;position(id,x,y);fire.add(49,x,y);}
+ auto discover=[&](uint16_t id){
+  uint16_t type=kind(id);uint32_t cost=dt::buildCost(type);int x,y;position(id,x,y);
   if(!cost||state.constructionCount>=dt::MaxJobs){
-   api->BuildingsDelete(id,dt::FoundationCancelMode);dtmem::invalidate();say(cost?"Too many buildings are being built at once.":"Only Dark Tribe buildings can be constructed.");continue;
+   api->BuildingsDelete(id,dt::FoundationCancelMode);dtmem::invalidate();say(cost?"Too many buildings are being built at once.":"Only Dark Tribe buildings can be constructed.");return;
   }
   auto&j=state.construction[state.constructionCount++];j={};j.site=id;j.identity=identity(id);j.kind=type;j.cost=cost;j.x=(uint16_t)x;j.y=(uint16_t)y;
   // A second Temple/Fortress (SU repeated placement, the last-building hotkey,
   // two quick outlines) is cancelled with mode 1 before payment; unfunded sites
-  // are refused as before.
-  dt::discoverConstruction(j,t,ops,limit);
- }
+  // are refused as before; so is a site inside the citadel fire blockade.
+  dt::discoverConstruction(j,t,ops,limit,&fire);
+ };
+ // Temple/Fortress sites first: of a farm and a citadel placed in the same
+ // tick the citadel is kept and the farm refused.
+ for(unsigned f=0;f<freshCount;f++)if(dt::citadelKind(kind(fresh[f])))discover(fresh[f]);
+ if(start||load)fireSweep(farms,fire,load);
+ for(unsigned f=0;f<freshCount;f++)if(!dt::citadelKind(kind(fresh[f])))discover(fresh[f]);
  // Taken before this tick's job updates: a job refunded below still counts
  // until the next tick, so the limit is never briefly too permissive.
  buildingLimit=limit;
+ fire.normalize();if(fire!=fireBlockade){fireBlockade=fire;placementHints.reset();}placementHints.blockWith(&fireBlockade);
  for(uint32_t i=0;i<state.constructionCount;){
   auto&j=state.construction[i];auto result=dt::updateConstruction(j,t,ops);
   if(result==dt::ConstructionResult::Fatal){fatal=true;running=false;log("Construction transaction or native identity check failed; plugin disabled");return;}
@@ -214,7 +267,7 @@ static void aircraftJobs(uint32_t t){for(uint32_t i=0;i<state.aircraftCount;){au
 // Pinned Lua FlyTo uses the last-created global, never the native selection.
 // Tick-only scoped rebinding retains the native scheduler and transport state.
 static bool flight(uint16_t id,uint32_t uid,int x,int y){
- if(!aircraft(id)||!dt::flightAllowed(uid,identity(id),x,y))return false;
+ if(!aircraft(id)||!dt::flightAllowed(uid,identity(id),x,y,side()))return false;
  auto*slot=(uint32_t*)(image+0x113fc98);if(!readable(slot,4))return false;
  dt::ScopedAircraft target(*slot,id);operation="DarkTribeFlyTo";
  BOOL ok=api->DarkTribeFlyTo(x,y);operation="idle";dtmem::invalidate();
@@ -338,7 +391,7 @@ static bool screenToMap(const Command&c,int&mx,int&my){
  int w=peek<int>(image+0xd691ec),h=peek<int>(image+0xd691f0);if(w<64||h<64||w>16384||h>16384)return false;
  double kx=c.cw>16?(double)w/c.cw:1.0,ky=c.ch>16?(double)h/c.ch:1.0;
  using Project=int(__stdcall*)(int,int,int*,int*);auto project=(Project)(image+0x259910);
- mx=0;my=0;project((int)(c.x*kx),(int)(c.y*ky),&mx,&my);return mx>1&&my>1&&mx<575&&my<575;
+ mx=0;my=0;project((int)(c.x*kx),(int)(c.y*ky),&mx,&my);int n=side();return mx>1&&my>1&&mx<n-1&&my<n-1;
 }
 // Selection brackets for picked aircraft. The native bracket comes from the
 // settler draw method (CSettler slot 5, RVA 0x181370: flag 0x200 fills the draw
@@ -520,7 +573,7 @@ static void unitCommand(const Command&c,uint32_t t){
  }
 }
 static void nextAircraft(){uint16_t first=0,next=0;for(uint32_t id=1;id<65536;id++)if(aircraft((uint16_t)id)){if(!first)first=(uint16_t)id;if(id>chosenAircraft&&!next)next=(uint16_t)id;}{uint16_t n=next?next:first;if(n)setPick({unitRef(n)});else setPick({});}buildOverride=false;if(chosenAircraft){api->ClearSelection();lastSelection=0;int x,y;position(chosenAircraft,x,y);api->MapSetScreenPos(x,y);}say(chosenAircraft?"":"No Manacopter ready. Build one at a Manacopter Hall.");}
-static uint32_t* templeQueues(uint16_t id){auto*p=entity(id);if(!p||p[10]!=8||!owned(id)||isSite(id)||(kind(id)!=50&&kind(id)!=51))return nullptr;BYTE*r=role(id);if(!readable(r,0x198)||!strstr(rtti(peek<uintptr_t>((uintptr_t)r)),"CDarkTempleRole"))return nullptr;return (uint32_t*)(r+0x180);}
+static uint32_t* templeQueues(uint16_t id){auto*p=entity(id);if(!p||p[10]!=8||!owned(id)||!standing(id)||isSite(id)||(kind(id)!=50&&kind(id)!=51))return nullptr;BYTE*r=role(id);if(!readable(r,0x198)||!strstr(rtti(peek<uintptr_t>((uintptr_t)r)),"CDarkTempleRole"))return nullptr;return (uint32_t*)(r+0x180);}
 // Temple/Fortress control cluster: one native order for one unit type (+1, +5,
 // -1, -5, 0 = clear, 100 = continuous), applied on the tick to the Dark Temple
 // role queue with the native semantics (queue-model.hpp). templeQueues checks
@@ -542,8 +595,8 @@ static void actions(std::vector<Command>&todo,uint32_t t){for(auto&c:todo){dtmem
    if(best.id){char line[120];snprintf(line,sizeof(line),"BOARD_ORDER craft=%u target=%u,%u units=%u",best.id,c.x,c.y,(unsigned)c.units.size());log(line);Command b{17,0,best.id,0,0,best.identity};b.units=c.units;requestBoarding(b,t);continue;}
    c.type=19;}
   if(c.type==19){for(auto unit:c.units)boarding.erase(std::remove_if(boarding.begin(),boarding.end(),[&](const Boarding&o){return dt::sameEntity(o.unit,unit);}),boarding.end());continue;}if(c.type==11){nextAircraft();continue;}if(c.type==13){setPick({});say("");continue;}if(c.type==dtui::AircraftKeep){keepAircraft(c);continue;}
- if(c.type==20){if(chosenAircraft==c.entity&&chosenIdentity==c.identity)destinationControls=!destinationControls;continue;}if(c.type==14){if(aircraft(c.entity)&&identity(c.entity)==c.identity&&chosenAircraft==c.entity){draftX=std::clamp((int)c.x+(c.arg==1?-10:c.arg==2?10:0),1,574);draftY=std::clamp((int)c.y+(c.arg==3?-10:c.arg==4?10:0),1,574);draftIdentity=c.identity;}continue;}if(c.type==33){int mx,my;if(!screenToMap(c,mx,my)||fleetPick.empty()){say("Flight target is outside the map.");continue;}c.type=32;c.x=(uint16_t)mx;c.y=(uint16_t)my;}
-  if(c.type==6||c.type==12||c.type==32){auto group=c.type==32?fleetPick:orderGroup(c.entity,c.identity);int x=c.x,y=c.y;if(c.type==12&&!group.empty()){int a,b;position(group[0].id,a,b);uint16_t base=nearestBase(a,b);if(!base||!exitPoint(base,x,y)){say("No free landing spot at your base.");continue;}}unsigned accepted=0;for(size_t i=0;i<group.size();i++){int tx=x,ty=y;if(group.size()>1)dt::groupTarget((int)i,x,y,tx,ty);cancelBoarding(group[i].id);dropUnloadJob(group[i].id);if(flight(group[i].id,group[i].identity,tx,ty))accepted++;}say(group.empty()?"No Manacopter selected.":accepted<group.size()?"Some Manacopters could not fly there.":"");continue;}
+ if(c.type==20){if(chosenAircraft==c.entity&&chosenIdentity==c.identity)destinationControls=!destinationControls;continue;}if(c.type==14){if(aircraft(c.entity)&&identity(c.entity)==c.identity&&chosenAircraft==c.entity){draftX=std::clamp((int)c.x+(c.arg==1?-10:c.arg==2?10:0),1,std::max(side()-2,1));draftY=std::clamp((int)c.y+(c.arg==3?-10:c.arg==4?10:0),1,std::max(side()-2,1));draftIdentity=c.identity;}continue;}if(c.type==33){int mx,my;if(!screenToMap(c,mx,my)||fleetPick.empty()){say("Flight target is outside the map.");continue;}c.type=32;c.x=(uint16_t)mx;c.y=(uint16_t)my;}
+  if(c.type==6||c.type==12||c.type==32){auto group=c.type==32?fleetPick:orderGroup(c.entity,c.identity);int x=c.x,y=c.y;if(c.type==12&&!group.empty()){int a,b;position(group[0].id,a,b);uint16_t base=nearestBase(a,b);if(!base||!exitPoint(base,x,y)){say("No free landing spot at your base.");continue;}}unsigned accepted=0;for(size_t i=0;i<group.size();i++){int tx=x,ty=y;if(group.size()>1)dt::groupTarget((int)i,x,y,side(),tx,ty);cancelBoarding(group[i].id);dropUnloadJob(group[i].id);if(flight(group[i].id,group[i].identity,tx,ty))accepted++;}say(group.empty()?"No Manacopter selected.":accepted<group.size()?"Some Manacopters could not fly there.":"");continue;}
 if(!owned(c.entity)||isSite(c.entity)||(c.identity&&identity(c.entity)!=c.identity))continue;uint16_t k=kind(c.entity);if(c.type==dtui::RecruitOrder&&(k==50||k==51)){recruitOrder(c);}else if(c.type==8&&(k==50||k==51)){dt::clearManualQueues(templeQueues(c.entity));say("");}else if((c.type==9||c.type==10)&&k==80){uint32_t refund=dt::cancelAircraft(state,c.entity,identity(c.entity),c.type==10);if(refund)changeMana((int)refund);say(refund?"":"No aircraft waiting at this Hall.");}else if(c.type==3&&k==80){if(mana()<300||state.aircraftCount>=dt::MaxJobs){say("A Manacopter needs 300 mana.");continue;}if(!changeMana(-300))return;uint32_t ready=dt::nextAircraftTime(state,c.entity,identity(c.entity),t);auto&j=state.aircraft[state.aircraftCount++];j.hall=c.entity;j.identity=identity(c.entity);j.readyAt=ready;say("");}else if(c.type==5){api->BuildingsCrush(c.entity);say("");}}}
 // Pair custom state to the exact engine save, rather than merely to its filename.
 struct Snapshot {char magic[8]={'D','T','S','A','V','E','2',0};BYTE hash[32]{};dt::State data{};uint32_t pending=0; /* Legacy diverted harvest; always zero in new saves. */};
@@ -561,28 +614,230 @@ static HANDLE WINAPI openW(LPCWSTR p,DWORD a,DWORD s,LPSECURITY_ATTRIBUTES q,DWO
 static BOOL WINAPI observedWrite(HANDLE h,LPCVOID p,DWORD n,LPDWORD written,LPOVERLAPPED over){BOOL ok=writeFile(h,p,n,written,over);if(ok&&n){AcquireSRWLockExclusive(&ioLock);for(auto&v:saving)if(v.handle==h)v.wrote=true;ReleaseSRWLockExclusive(&ioLock);}return ok;}
 static BOOL WINAPI closeFile(HANDLE h){Saving found{};bool have=false;AcquireSRWLockExclusive(&ioLock);for(size_t i=0;i<saving.size();i++)if(saving[i].handle==h){found=saving[i];saving.erase(saving.begin()+i);have=true;break;}ReleaseSRWLockExclusive(&ioLock);BOOL ok=closeHandle(h);if(have&&found.wrote&&ok&&hashFile(found.path,found.snap.hash)){std::string path=sidecar(found.snap.hash),temp=path+".tmp";HANDLE file=createA(temp.c_str(),GENERIC_WRITE,0,nullptr,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,nullptr);DWORD wrote=0;bool saved=file!=INVALID_HANDLE_VALUE&&WriteFile(file,&found.snap,sizeof(found.snap),&wrote,nullptr)&&wrote==sizeof(found.snap)&&FlushFileBuffers(file);if(file!=INVALID_HANDLE_VALUE)closeHandle(file);if(saved)saved=MoveFileExA(temp.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)!=0;log(saved?"Save and construction/aircraft sidecar committed":"Save sidecar could not be written");}return ok;}
 static bool iat(uintptr_t rva,void*hook,void**original){void**at=(void**)(image+rva);if(!*original)*original=*at;DWORD old;if(!VirtualProtect(at,4,PAGE_READWRITE,&old))return false;*at=hook;VirtualProtect(at,4,old,&old);return true;}
-static HRESULT __stdcall mapInit(LPVOID,LPVOID){running=false;placementHints.reset();AcquireSRWLockExclusive(&stateLock);initialized=false;newMap=true;ordinarySelectionPending=false;destinationControls=false;boarding.clear();cachedSelection.clear();cachedFleet.clear();lastSelection=0;chosenAircraft=0;chosenIdentity=0;draftIdentity=0;buildOverride=false;fleetPick.clear();cachedPick.clear();unloadJobs.clear();unloadGroup.clear();unloadTargeting=false;ReleaseSRWLockExclusive(&stateLock);AcquireSRWLockExclusive(&commandLock);commands.clear();ReleaseSRWLockExclusive(&commandLock);return 0;}
+// Computer offence against the Dark Tribe (r27/r28, research/AI_OFFENCE_0215.md).
+// The native AI only targets towers/castles, so every computer sector AI gets
+// a director (offence-model.hpp) that uses the AI's own config, soldiers,
+// gardeners and strength values: a native state-6 squad holds the borrowed
+// soldiers, the plugin moves them, and the AI's gardeners green the ring
+// around a Dark building so it collapses natively (the plugin's native destroy
+// is only the fallback for an all-green ring). r28: six attack styles, short
+// rests between campaigns, an assault calls the other computer enemies, and
+// free gardeners green Dark land in the computer's own territory and on the
+// Dark border. Tick-only and transient: mod squads restored from a save are
+// adopted again on the first tick.
+static dtoffence::Native nativeOffence;static dtoffence::Campaign campaigns[9][8];static bool offenceAdopted=false;
+static const char*offenceReason[9][8];static uint32_t offenceDeclines[9][8];static bool offenceReleased=false;static uint32_t offenceRecruitAt[9],offenceOrderAt[9],offenceRecruitNote[9];static int offenceOrderAlive[9];static const char*offenceRazeNote="";static bool offenceNoEconomy[9];static const char*offenceRecruitWhy[9];static const char*offenceToolsWhy[9];static uint32_t offenceToolsNote[9];
+// r29 review: the plugin's part of each computer's shovel order, watched every tick (transient, never in dt::State).
+static dtoffence::ShovelWatch offenceShovelWatch[9];static uintptr_t offenceShovelEco[9];static uint32_t offenceShovelRestores[9],offenceShovelRestoreNote[9];
+// An open call for allies: an assault on a Dark building that the other computer enemies join (transient).
+struct OffenceCall {dtoffence::Target target{};uint32_t until=0;uint8_t caller=0;};static OffenceCall offenceCall;
+// r30: the citadel fire as last logged (OFFENCE_FIRE_STATE on change) and the last native-soldier census note per player (transient).
+static char offenceFireNote[320];static uint32_t offenceFireNativeAt[9];
+static void offenceReset(){offenceAdopted=false;offenceReleased=false;for(auto&row:campaigns)for(auto&c:row)c=dtoffence::Campaign{};memset(offenceReason,0,sizeof(offenceReason));memset(offenceDeclines,0,sizeof(offenceDeclines));memset(offenceRecruitAt,0,sizeof(offenceRecruitAt));memset(offenceNoEconomy,0,sizeof(offenceNoEconomy));memset(offenceOrderAt,0,sizeof(offenceOrderAt));memset(offenceOrderAlive,0,sizeof(offenceOrderAlive));memset(offenceRecruitNote,0,sizeof(offenceRecruitNote));memset(offenceRecruitWhy,0,sizeof(offenceRecruitWhy));memset(offenceToolsWhy,0,sizeof(offenceToolsWhy));memset(offenceToolsNote,0,sizeof(offenceToolsNote));for(auto&w:offenceShovelWatch)w=dtoffence::ShovelWatch{};memset(offenceShovelEco,0,sizeof(offenceShovelEco));memset(offenceShovelRestores,0,sizeof(offenceShovelRestores));memset(offenceShovelRestoreNote,0,sizeof(offenceShovelRestoreNote));offenceCall=OffenceCall{};offenceRazeNote="";nativeOffence.resetTerritory();offenceFireNote[0]=0;memset(offenceFireNativeAt,0,sizeof(offenceFireNativeAt));}
+static const char*offenceEvent(dtoffence::Event e){static const char*names[]={"DECLINE","LAUNCH","STAGE","ASSAULT","SIEGE","DESTROY","DEFER","RETARGET","RETURN","DISSOLVE","LOST","ADOPT","ORDER_IGNORED","AVOID","COLLAPSE","GREENING","GARDENERS","RECLAIM","FRONT","HUNT","JOIN","CALL","FIRE","CONVOY"};return names[(int)e];}
+// Gardeners held by any campaign of the player (a gardener serves one army at a time).
+static bool offenceHeld(uint8_t p,uint16_t id){for(auto&c:campaigns[p])for(int i=0;i<c.gardeners;i++)if(c.gid[i]==id)return true;return false;}
+struct OffenceOps {
+ int region=0;
+ bool sector(const dtoffence::Campaign&c){return nativeOffence.sector(c.player,c.sector)!=0;}
+ dtoffence::Config config(uint8_t p){return nativeOffence.config(p);}
+ dtoffence::Strength strength(const dtoffence::Campaign&c){return nativeOffence.strength(c.player,c.sector);}
+ void targets(const dtoffence::Campaign&,std::vector<dtoffence::Target>&out){nativeOffence.targets(region,out);}
+ bool alive(const dtoffence::Target&t){return nativeOffence.alive(t);}
+ int defenders(int x,int y,int radius,bool weighted){return nativeOffence.defenders(x,y,radius,weighted);}
+ void available(const dtoffence::Campaign&c,int x,int y,std::vector<dtoffence::Soldier>&out){nativeOffence.available(c.player,c.sector,x,y,out);}
+ int raise(dtoffence::Campaign&c,const std::vector<dtoffence::Soldier>&chosen){operation="offence squad";int n=nativeOffence.raise(c.player,c.sector,chosen,c.squad);operation="idle";
+  if(n<=0){char msg[160];snprintf(msg,sizeof(msg),"OFFENCE_RAISE_FAILED player=%u sector=%u wanted=%u reason=%s",c.player,c.sector,(unsigned)chosen.size(),nativeOffence.reason);log(msg);}return n;}
+ bool members(const dtoffence::Campaign&c,std::vector<dtoffence::Soldier>&out){return nativeOffence.members(c.player,c.sector,c.squad,out);}
+ // The native group order (event 0x1396 -> CGroupMgr 0x16A800) has no owner
+ // test. FORWARD also on the way home: WATCH would leave the soldiers passive
+ // there (and park gardeners for good). Destinations never have flag 0x01, so
+ // no soldier is garrisoned. At most 100 units per order (formation table, 0x16A109).
+ void order(const dtoffence::Campaign&c,std::vector<WORD>&ids,int x,int y,const char*what){
+  int n=side();if(!n||x<2||y<2||x>=n-2||y>=n-2||ids.empty())return;
+  for(size_t at=0;at<ids.size();at+=100){SIZE_T count=std::min<size_t>(100,ids.size()-at);internalSend=true;BOOL ok=api->SendWarriors(x,y,S4_MOVEMENT_FORWARD,ids.data()+at,count,1);internalSend=false;dtmem::invalidate();
+   if(!ok){char msg[140];snprintf(msg,sizeof(msg),"OFFENCE_ORDER_REFUSED player=%u sector=%u units=%u at=%d,%d what=%s",c.player,c.sector,(unsigned)count,x,y,what);log(msg);}}
+ }
+ void move(const dtoffence::Campaign&c,const std::vector<dtoffence::Soldier>&m,int x,int y,bool home){std::vector<WORD> ids;for(auto&s:m)if(nativeOffence.movable(s.id,s.uid))ids.push_back(s.id);order(c,ids,x,y,home?"army home":"army");}
+ bool stand(const dtoffence::Campaign&,int x,int y,int pass){return nativeOffence.stand(x,y,pass,region);}
+ bool free(int x,int y){return nativeOffence.free(x,y);}
+ bool destroy(const dtoffence::Campaign&c,const dtoffence::Target&t){
+  operation="offence native destroy";bool ok=nativeOffence.destroy(c.player,t);operation="idle";
+  char msg[200];snprintf(msg,sizeof(msg),"OFFENCE_RAZE player=%u sector=%u target=%u kind=%u identity=%08lx at=%d,%d result=%s",c.player,c.sector,t.id,t.kind,(unsigned long)t.uid,t.x,t.y,ok?"destroyed":nativeOffence.reason);
+  if(ok||strcmp(offenceRazeNote,nativeOffence.reason)){log(msg);offenceRazeNote=ok?"":nativeOffence.reason;}return ok; /* a refusal is logged once while it lasts */
+ }
+ bool dissolve(dtoffence::Campaign&c){operation="offence squad dissolve";bool ok=nativeOffence.dissolve(c.player,c.sector,c.squad);operation="idle";
+  if(!ok){char msg[120];snprintf(msg,sizeof(msg),"OFFENCE_DISSOLVE_INCOMPLETE player=%u sector=%u",c.player,c.sector);log(msg);}else c.squad=0;return ok;}
+ void gardeners(const dtoffence::Campaign&c,std::vector<dtoffence::Gardener>&out){std::vector<dtoffence::Gardener> all;nativeOffence.gardeners(c.player,region,all);out.clear();for(auto&g:all)if(!offenceHeld(c.player,g.id))out.push_back(g);}
+ bool gardener(const dtoffence::Campaign&c,uint16_t id,uint32_t uid,dtoffence::Gardener&g){return nativeOffence.gardener(c.player,id,uid,g);}
+ // One gardener per order: its destination becomes its work centre.
+ void sendGardener(const dtoffence::Campaign&c,const dtoffence::Gardener&g,int x,int y){std::vector<WORD> ids;if(nativeOffence.movable(g.id,g.uid))ids.push_back(g.id);order(c,ids,x,y,"gardener");}
+ void moveGardeners(const dtoffence::Campaign&c,const std::vector<dtoffence::Gardener>&gs,int x,int y){std::vector<WORD> ids;for(auto&g:gs)if(nativeOffence.movable(g.id,g.uid))ids.push_back(g.id);order(c,ids,x,y,"gardeners");}
+ void ring(const dtoffence::Target&t,std::vector<dtoffence::RingCell>&out){nativeOffence.ring(t,out);}
+ bool beside(const dtoffence::Target&t,const dtoffence::RingCell&r,int&x,int&y){return nativeOffence.beside(t,r,x,y);}
+ // Soldiers standing on a Dark ring cell keep it Dark (the gardener's cell test skips occupied cells): move them out (at most 12 per pass), never into the citadel fire (r30).
+ void clearFootprint(const dtoffence::Campaign&c,const dtoffence::Target&t,const std::vector<dtoffence::Soldier>&m,const dtoffence::Fire&f){
+  std::vector<dtoffence::RingCell> ring;nativeOffence.ring(t,ring);int moved=0;auto cool=[&](int px,int py){return !dtoffence::inFire(px,py,f);};
+  for(auto&s:m){if(moved>=12)break;bool blocking=false;for(auto&r:ring)if(r.dark&&r.x==s.x&&r.y==s.y)blocking=true;int x=0,y=0;if(!blocking||!nativeOffence.outside(t,s.x,s.y,cool,x,y))continue;std::vector<WORD> ids;if(nativeOffence.movable(s.id,s.uid))ids.push_back(s.id);order(c,ids,x,y,"off the ring");moved++;}
+ }
+ bool darkNear(const dtoffence::Campaign&,int x,int y,int radius,const std::vector<dtoffence::Keep>&keep,int&dx,int&dy){return nativeOffence.darkNear(x,y,radius,keep,region,dx,dy);}
+ // Dark cells inside the computer's own territory (it cannot build there).
+ bool ownDark(const dtoffence::Campaign&c,int x,int y,int radius,const std::vector<dtoffence::Keep>&keep,int&dx,int&dy){return nativeOffence.ownDark(c.player,x,y,radius,keep,region,dx,dy);}
+ void darkFighters(const dtoffence::Campaign&,std::vector<std::pair<int,int>>&out){nativeOffence.fighters(out);}
+ bool reach(const dtoffence::Campaign&,int x,int y){return nativeOffence.reach(x,y,region);}
+ // One campaign per parked citadel: the first (player, sector) of those besieging it works its ring.
+ bool leads(const dtoffence::Campaign&c,const dtoffence::Target&t){for(uint8_t p=2;p<=8;p++)for(int i=0;i<8;i++){auto&o=campaigns[p][i];if(&o==&c||o.phase!=dtoffence::Phase::Assault||o.target.id!=t.id||o.target.uid!=t.uid)continue;if(p*8+i<c.player*8+c.sector)return false;}return true;}
+ bool call(const dtoffence::Campaign&c,uint32_t t,dtoffence::Target&out){if(!offenceCall.until||t>=offenceCall.until||offenceCall.caller==c.player)return false;out=offenceCall.target;return true;}
+ // Opens a call when another computer is an enemy of the Dark player too.
+ bool announce(const dtoffence::Campaign&c,uint32_t t,const dtoffence::Target&target){bool others=false;for(uint8_t p=2;p<=8;p++)if(p!=c.player&&nativeOffence.enemyOfDark(p)&&nativeOffence.playerAI(p))others=true;
+  if(!others)return false;offenceCall.target=target;offenceCall.until=t+dtoffence::CallTicks;offenceCall.caller=c.player;return true;}
+ // The human's paid or pending Dark construction sites with their kind: gardeners keep away (greening would
+ // collapse them); r30: a Farm site turns the citadel fire on, a Temple/Fortress site adds a fire centre.
+ void sites(const dtoffence::Campaign&,std::vector<dtoffence::Site>&out){for(uint32_t i=0;i<state.constructionCount&&i<dt::MaxJobs;i++)if(!state.construction[i].refunded){dtoffence::Site s;s.x=state.construction[i].x;s.y=state.construction[i].y;s.kind=state.construction[i].kind;out.push_back(s);}}
+ // r30: the native ready-farm counter of the Dark player (the citadel fire's own input), -1 unreadable.
+ int readyFarms(){return nativeOffence.readyFarms();}
+ bool spare(const dtoffence::Target&t,int x,int y){return nativeOffence.spare(t,x,y);}
+ bool parked(const dtoffence::Target&t){return nativeOffence.parked(t);}
+ void report(dtoffence::Event e,const dtoffence::Campaign&c){
+  if(e==dtoffence::Event::Decline){uint32_t&n=offenceDeclines[c.player][c.sector];const char*&last=offenceReason[c.player][c.sector];bool fresh=last!=c.reason;last=c.reason;if(!fresh&&(++n%20))return;if(fresh)n=0;}
+  /* r30: units=soldiers or gardeners ordered out, benched=gardeners dropped and sent home, to=the cell ordered (exit point). */
+  if(e==dtoffence::Event::Fire){char note[300];snprintf(note,sizeof(note),"OFFENCE_FIRE player=%u sector=%u phase=%d style=%s target=%u kind=%u door=%d,%d units=%d benched=%d to=%d,%d reason=%s",c.player,c.sector,(int)c.phase,dtoffence::styleName(c.style),c.target.id,c.target.kind,c.target.doorX,c.target.doorY,c.value,c.versus,c.goalX,c.goalY,c.reason?c.reason:"");log(note);return;}
+  /* r32: the convoy (rate-limited in the model): gap=farthest held gardener from the army centre (rally: distance to the gardeners' centre), limit=the gap above which the army holds (rally: RallyGap), left=gardeners left behind, wait=ticks the army held, at=army centre (rally: rally cell). */
+  if(e==dtoffence::Event::Convoy){char note[300];snprintf(note,sizeof(note),"OFFENCE_CONVOY player=%u sector=%u phase=%d style=%s target=%u kind=%u door=%d,%d army=%u gardeners=%d gap=%d limit=%d left=%d wait=%u at=%d,%d reason=%s",c.player,c.sector,(int)c.phase,dtoffence::styleName(c.style),c.target.id,c.target.kind,c.target.doorX,c.target.doorY,(unsigned)c.initial,c.gardeners,c.gap,c.versus,c.value,c.waited,c.goalX,c.goalY,c.reason?c.reason:"");log(note);return;}
+  /* r32: gap=farthest held gardener from the army centre at the last convoy look, wait=ticks the army has held for its gardeners. */
+  char msg[400];snprintf(msg,sizeof(msg),"OFFENCE_%s player=%u sector=%u phase=%d style=%s raid=%u target=%u kind=%u door=%d,%d army=%u gardeners=%d ring=%u/%d value=%d versus=%d chance=%u gap=%d wait=%u reason=%s",
+   offenceEvent(e),c.player,c.sector,(int)c.phase,dtoffence::styleName(c.style),(unsigned)c.raid,c.target.id,c.target.kind,c.target.doorX,c.target.doorY,(unsigned)c.initial,c.gardeners,c.progress,c.ringSize,c.value,c.versus,c.chance,c.gap,c.waited,c.reason?c.reason:"");log(msg);
+ }
+};
+// The plugin stopped at runtime (fatal) or a save cannot be continued: hand
+// every mod squad back to its AI, otherwise those soldiers would stand idle
+// for the rest of the game. Tick only; native calls only when pins verified.
+static bool offencePinned=false;
+static void offenceStopLocked(){if(!offencePinned||offenceReleased)return;offenceReleased=true;operation="offence release";int n=nativeOffence.releaseAll();operation="idle";dtmem::invalidate();
+ for(auto&row:campaigns)for(auto&c:row)c=dtoffence::Campaign{};char msg[96];snprintf(msg,sizeof(msg),"OFFENCE_RELEASE squads=%d (plugin stopped)",n);log(msg);}
+// r29: shovels for the gardeners at the computer's own toolsmith. The native
+// AI never orders shovels for gardeners (only for its diggers, 0x249835), and
+// its building manager can also clear or lower the shovel order (0x249770
+// sends 10-2*diggers: 0 at its 5-digger steady state, negative above). Every
+// 250 ticks offenceTools tops the home economy's native shovel order up
+// through 0xD6A90, as the toolsmith menu does, and remembers its own part of
+// it (offenceShovelWatch, transient; the order byte itself is saved with the
+// economy). Every tick offenceShovelGuard puts that part back after a clear.
+// The plugin hook (0xE9B18) runs before the net loop dispatches the AI's 0x13A9
+// event (0xE9B5E) and before the entity update, so a clear can cost the
+// toolsmith one tick, not the whole 250-tick window. Logs each new order, a
+// changed refusal (then every 6,000 ticks) and the first restore (then every
+// 6,000 ticks, with the count); the normal states stay quiet.
+static void offenceTools(uint8_t p,uint32_t t,const dtoffence::Native::Supply&supply,int wanted){
+ auto tools=nativeOffence.tools(p,supply.eco);const char*why="";
+ int amount=dtoffence::shovelOrder(supply.alive,supply.pending,supply.shovels,tools.ordered,tools.toolsmiths,&why,wanted);
+ int target=dtoffence::shovelTarget(supply.alive,supply.pending,supply.shovels,wanted);auto&watch=offenceShovelWatch[p];offenceShovelEco[p]=supply.eco;
+ if(amount<=0){dtoffence::shovelNoted(watch,!strcmp(why,"already ordered"),tools.ordered,target);
+  if(strcmp(why,"enough gardeners")&&strcmp(why,"spare shovels")&&(why!=offenceToolsWhy[p]||t-offenceToolsNote[p]>=6000)){offenceToolsWhy[p]=why;offenceToolsNote[p]=t;
+   char msg[260];snprintf(msg,sizeof(msg),"OFFENCE_TOOLS player=%u toolsmiths=%d otherEconomy=%d order=%d->%d shovels=%d gardeners=%d pending=%d restores=%u reason=%s",p,tools.toolsmiths,tools.elsewhere,tools.ordered,tools.ordered,supply.shovels,supply.alive,supply.pending,offenceShovelRestores[p],why);log(msg);}
+  return;}
+ operation="offence shovel order";bool ok=nativeOffence.orderShovels(tools,supply.eco,amount);operation="idle";int after=nativeOffence.shovelOrdered(supply.eco);
+ dtoffence::shovelNoted(watch,ok,after,target);
+ const char*result=ok?"ordered":"order refused";if(!ok&&result==offenceToolsWhy[p]&&t-offenceToolsNote[p]<6000)return;offenceToolsWhy[p]=result;offenceToolsNote[p]=t;
+ char msg[260];snprintf(msg,sizeof(msg),"OFFENCE_TOOLS player=%u toolsmiths=%d otherEconomy=%d order=%d->%d shovels=%d gardeners=%d pending=%d restores=%u reason=%s",p,tools.toolsmiths,tools.elsewhere,tools.ordered,after,supply.shovels,supply.alive,supply.pending,offenceShovelRestores[p],result);log(msg);
+}
+// Every tick, before the entity update: when the shovel order fell by two or
+// more since the last look (a native clear, see dtoffence::shovelRestore), put
+// back the plugin's part through 0xD6A90. Only while something is owed, on the
+// same live economy and with a ready toolsmith there; otherwise forget it.
+static void offenceShovelGuard(uint8_t p,uint32_t t){
+ auto&watch=offenceShovelWatch[p];if(watch.owed<=0)return;uintptr_t eco=offenceShovelEco[p];
+ if(!nativeOffence.economyLive(p,eco)){watch=dtoffence::ShovelWatch{};return;}
+ int before=nativeOffence.shovelOrdered(eco);int add=dtoffence::shovelRestore(watch,before);if(add<=0)return;
+ auto tools=nativeOffence.tools(p,eco);
+ operation="offence shovel restore";bool ok=nativeOffence.orderShovels(tools,eco,add);operation="idle";int after=nativeOffence.shovelOrdered(eco);
+ if(ok){watch.seen=after;offenceShovelRestores[p]++;}else watch=dtoffence::ShovelWatch{};
+ if(ok&&offenceShovelRestores[p]>1&&t-offenceShovelRestoreNote[p]<6000)return;offenceShovelRestoreNote[p]=t;
+ char msg[220];snprintf(msg,sizeof(msg),"OFFENCE_TOOLS player=%u toolsmiths=%d order=%d->%d owed=%d restores=%u reason=%s",p,tools.toolsmiths,before,after,watch.owed,offenceShovelRestores[p],ok?"restored after a native clear":"restore refused");log(msg);
+}
+// Native gardener recruitment per computer player, every 250 ticks: one
+// order at a time through the player's own economy (carrier + shovel).
+static void offenceRecruit(uint8_t p,uint32_t t){
+ if(offenceRecruitAt[p]&&t-offenceRecruitAt[p]<250)return;offenceRecruitAt[p]=t;
+ dtoffence::Config cfg=nativeOffence.config(p);if(!cfg.ok||cfg.mode<=0)return;
+ dtoffence::Strength home{};for(int i=0;i<nativeOffence.sectorCount(p)&&!home.ok;i++)home=nativeOffence.strength(p,i);if(!home.ok)return;
+ auto supply=nativeOffence.supply(p,home.homeX,home.homeY);
+ if(!supply.eco){if(!offenceNoEconomy[p]){offenceNoEconomy[p]=true;char msg[120];snprintf(msg,sizeof(msg),"OFFENCE_RECRUIT player=%u no economy at home %d,%d",p,home.homeX,home.homeY);log(msg);}return;}
+ /* r32: a large computer keeps more gardeners: GardenersWanted plus one per 10 soldiers beyond 40 (the free soldiers of its
+    sectors plus those its armies took), at most 20 (dtoffence::gardenersWanted); the shovel orders follow the same number. */
+ int soldiers=0;for(int i=0;i<nativeOffence.sectorCount(p);i++){std::vector<dtoffence::Soldier> free;nativeOffence.available(p,i,home.homeX,home.homeY,free);soldiers+=(int)free.size();}
+ for(auto&c:campaigns[p])if(c.phase!=dtoffence::Phase::Idle)soldiers+=c.initial;
+ int wanted=dtoffence::gardenersWanted(soldiers);
+ offenceTools(p,t,supply,wanted);
+ /* Carriers walking to a shovel are invisible (not in the per-player lists):
+    an order counts as coming until a gardener more is alive or 1,200 ticks passed. */
+ int coming=offenceOrderAt[p]&&t-offenceOrderAt[p]<1200&&supply.alive<=offenceOrderAlive[p]?1:0;const char*why="";
+ if(!dtoffence::recruitOrder(supply.alive,supply.pending,coming,supply.shovels,supply.carriers,&why,wanted)){
+  /* Why no gardener is ordered (no shovels, no carriers): on a new reason, then every 6,000 ticks. */
+  if(strcmp(why,"enough gardeners")&&strcmp(why,"order on its way")&&(why!=offenceRecruitWhy[p]||t-offenceRecruitNote[p]>=6000)){offenceRecruitWhy[p]=why;offenceRecruitNote[p]=t;
+   char msg[220];snprintf(msg,sizeof(msg),"OFFENCE_RECRUIT_WAIT player=%u gardeners=%d wanted=%d pending=%d shovels=%d carriers=%u reason=%s",p,supply.alive,wanted,supply.pending,supply.shovels,(unsigned)supply.carriers,why);log(msg);}
+  return;}
+ operation="offence gardener recruitment";bool ok=nativeOffence.recruit(supply);operation="idle";if(ok){offenceOrderAt[p]=t;offenceOrderAlive[p]=supply.alive;}
+ char msg[220];snprintf(msg,sizeof(msg),"OFFENCE_RECRUIT player=%u gardeners=%d wanted=%d soldiers=%d pending=%d shovels=%d ordered=%u",p,supply.alive,wanted,soldiers,supply.pending,supply.shovels,(unsigned)ok);log(msg);
+}
+// r30: the citadel fire every director step. OFFENCE_FIRE_STATE when it changes (the native ready-farm
+// counter, the listed ready farms, Farm sites, on/off, the fire centres), and OFFENCE_FIRE_NATIVE (log
+// only, per player at most every 300 ticks) for soldiers of the native AI (not in a mod squad) standing
+// within FireLine on walkable Dark land: the plugin does not order soldiers the native agents hold.
+static void offenceFire(OffenceOps&ops,uint32_t t){
+ std::vector<dtoffence::Target> all;nativeOffence.targets(0,all);dtoffence::Campaign none;dtoffence::Fire f=dtoffence::fire(none,ops,all);
+ char msg[320];int at=snprintf(msg,sizeof(msg),"OFFENCE_FIRE_STATE ready=%d listed=%d farmSites=%d on=%u centres=",f.ready,f.listed,f.farmSites,(unsigned)f.on);
+ for(auto&z:f.z)if(at>0&&at<(int)sizeof(msg)-16)at+=snprintf(msg+at,sizeof(msg)-at,"%d,%d;",z.x,z.y);
+ if(strcmp(msg,offenceFireNote)){memcpy(offenceFireNote,msg,sizeof(offenceFireNote));offenceFireNote[sizeof(offenceFireNote)-1]=0;log(msg);}
+ if(!f.on||f.z.empty())return;
+ for(uint8_t p=2;p<=8;p++){if(offenceFireNativeAt[p]&&t-offenceFireNativeAt[p]<300)continue;if(!nativeOffence.playerAI(p))continue;
+  std::vector<uintptr_t> own;for(auto&c:campaigns[p])if(c.squad)own.push_back(c.squad);int x=0,y=0,n=nativeOffence.fireCensus(p,f,own,x,y);if(!n)continue;offenceFireNativeAt[p]=t;
+  char note[160];snprintf(note,sizeof(note),"OFFENCE_FIRE_NATIVE player=%u soldiers=%d at=%d,%d (native AI soldiers within the fire line, not ordered by the plugin)",p,n,x,y);log(note);}
+}
+static void offenceTick(uint32_t t){
+ nativeOffence.scanTerritory(16); /* computer-owned Dark land, a full pass every 32..36 ticks */
+ for(uint8_t p=2;p<=8;p++)offenceShovelGuard(p,t); /* r29 review: put back a cleared shovel order before the entity update */
+ if(t%dtoffence::Period)return;OffenceOps ops;
+ if(!offenceAdopted){offenceAdopted=true;
+  for(uint8_t p=2;p<=8;p++)for(int i=0;i<nativeOffence.sectorCount(p);i++){std::vector<uintptr_t> found;nativeOffence.modSquads(p,i,found);
+   for(size_t k=0;k<found.size();k++){auto&c=campaigns[p][i];c.player=p;c.sector=(uint8_t)i;std::vector<dtoffence::Soldier> m;nativeOffence.members(p,i,found[k],m);
+    if(k==0){ops.region=nativeOffence.strength(p,i).region;dtoffence::adopt(c,t,found[k],(int)m.size(),ops);}
+    else{dtoffence::Campaign extra=c;extra.squad=found[k];ops.dissolve(extra);}}}}
+ offenceFire(ops,t);
+ for(uint8_t p=2;p<=8;p++){
+  bool active=nativeOffence.enemyOfDark(p)&&nativeOffence.playerAI(p);int n=active?nativeOffence.sectorCount(p):0;
+  if(active)offenceRecruit(p,t);else offenceShovelWatch[p]=dtoffence::ShovelWatch{};
+  if(active&&t%3000==0){int owned=nativeOffence.ownedDark(p);dtoffence::Strength home{};for(int i=0;i<n&&!home.ok;i++)home=nativeOffence.strength(p,i);
+   /* What keeps this computer attacking: barracks, weapons, carriers, soldiers, gardeners, and the Dark land it owns. */
+   if(home.ok){auto k=nativeOffence.census(p,home.homeX,home.homeY);char msg[340];snprintf(msg,sizeof(msg),"OFFENCE_SUPPLY player=%u barracks=%d swords=%d bows=%d raceWeapons=%d shovels=%d carriers=%d inFlight=%d reserve=%d soldiers=%d gardeners=%d ownedDarkCells=%d economy=%u toolsmiths=%d shovelOrder=%d ironbars=%d coal=%d",
+    p,k.barracks,k.swords,k.bows,k.special,k.shovels,k.carriers,k.busy,k.reserve,k.soldiers,k.gardeners,owned,(unsigned)k.eco,k.toolsmiths,k.shovelOrder,k.ironbars,k.coal);log(msg);}}
+  for(int i=0;i<8;i++){auto&c=campaigns[p][i];c.player=p;c.sector=(uint8_t)i;
+   if(i>=n){if(c.phase!=dtoffence::Phase::Idle){if(!active&&nativeOffence.sector(p,i))ops.dissolve(c); /* no longer an enemy: give the soldiers back */c.reason=active?"sector gone":"not an enemy any more";ops.report(dtoffence::Event::Lost,c);dtoffence::toIdle(c,t);}continue;}
+   ops.region=nativeOffence.strength(p,i).region;dtoffence::step(c,t,ops);}
+ }
+}
+static HRESULT __stdcall mapInit(LPVOID,LPVOID){dtdiag::beat(false,false);running=false;placementHints.reset();AcquireSRWLockExclusive(&stateLock);initialized=false;newMap=true;offenceReset();ordinarySelectionPending=false;destinationControls=false;boarding.clear();cachedSelection.clear();cachedFleet.clear();lastSelection=0;chosenAircraft=0;chosenIdentity=0;draftIdentity=0;buildOverride=false;fleetPick.clear();cachedPick.clear();unloadJobs.clear();unloadGroup.clear();unloadTargeting=false;ReleaseSRWLockExclusive(&stateLock);AcquireSRWLockExclusive(&commandLock);commands.clear();ReleaseSRWLockExclusive(&commandLock);return 0;}
 // Pinned 0.2.4 failure evidence: CBarrackRole needs an owned entrance economy.
 // Read-only diagnostics run on ticks; they never patch game sector/player state.
 static void logStartingSectors(){
  for(uint32_t id=1;id<65536;id++){auto*p=entity((uint16_t)id);if(!p||p[10]!=8||(p[32]>>4)!=2)continue;
-  uint32_t door=peek<uint32_t>((uintptr_t)p+0x48);int x=door&65535,y=door>>16;if(x<0||y<0||x>=576||y>=576)continue;
+  uint32_t door=peek<uint32_t>((uintptr_t)p+0x48);int x=door&65535,y=door>>16;if(x<0||y<0||x>=side()||y>=side())continue;
   uint32_t sector=api->LandscapeGetEcoSector(x,y),owner=api->LandscapeGetOwner(x,y);
   uint16_t economy=sector<32768?peek<uint16_t>(image+0xef1a26+sector*20):0;
   uintptr_t pool=economy?peek<uintptr_t>(image+0x106c8a4+economy*4):0;
   char msg[256];snprintf(msg,sizeof(msg),"START_SECTOR entity=%u identity=%08lx kind=%u door=%d,%d owner=%u sector=%u economy=%u economyPresent=%u role=%s",id,(unsigned long)identity((uint16_t)id),kind((uint16_t)id),x,y,owner,sector,economy,pool?1:0,rtti(peek<uintptr_t>((uintptr_t)role((uint16_t)id))));log(msg);
  }
 }
-static void initialize(uint32_t t){boarding.clear();destinationControls=false;state=dt::State{};AcquireSRWLockExclusive(&ioLock);bool restored=hasPendingLoad&&t>=pendingLoad.data.tick&&t-pendingLoad.data.tick<=5;if(restored){
+static void initialize(uint32_t t){boarding.clear();offenceReset();destinationControls=false;state=dt::State{};AcquireSRWLockExclusive(&ioLock);bool restored=hasPendingLoad&&t>=pendingLoad.data.tick&&t-pendingLoad.data.tick<=5;if(restored){
  state=pendingLoad.data;
  uint64_t held=state.harvested-state.delivered-state.lost;
  if(!dt::retireLegacyFarmState(state)){fatal=true;running=false;log("Invalid legacy farm state; save refused");}
  if(held||state.harvested||pendingLoad.pending){char msg[192];snprintf(msg,sizeof(msg),"Legacy farm bookkeeping retired: held=%llu pending=%u; native bank and units unchanged",(unsigned long long)held,pendingLoad.pending);log(msg);}
-}hasPendingLoad=false;ReleaseSRWLockExclusive(&ioLock);if(fatal)return;if(!restored&&(t>100||luaConstant("DT_IsNew")!=1)){fatal=true;running=false;say("This saved game cannot be continued. Start a new First Dawn game.");log("Unsupported save or missing sidecar; economy disabled");return;}state.tick=t;initialized=true;newMap=false;running=true;say(restored?"":"");log(restored?"State restored from matching save hash":"New Dark economy initialized");}
-static HRESULT __stdcall tick(DWORD,BOOL,BOOL){dtmem::Scope memoryScope;tickAt=GetTickCount64();if(hdIsActive){hdActive=hdIsActive()!=FALSE;bool blocked=hdMouseBlocked()!=FALSE;if(blocked!=hdBlocked.exchange(blocked)){log(blocked?"HD_STATE mouse blocked by HD (panel hidden)":"HD_STATE mouse unblocked");}}bool match=signature();sceneMatches=match;if(fatal||!match){running=false;return 0;}uint32_t t=peek<uint32_t>(image+0xe66b14);if(t<10)return 0;if(!scenarioVersion()){running=false;return 0;}nativeTick=t;AcquireSRWLockExclusive(&stateLock);if(!initialized||newMap){initialize(t);if(!fatal)logStartingSectors();}if(fatal){ReleaseSRWLockExclusive(&stateLock);return 0;}running=true;if(t<state.tick){initialized=false;running=false;ReleaseSRWLockExclusive(&stateLock);return 0;}state.tick=t;std::vector<Command> todo;AcquireSRWLockExclusive(&commandLock);todo.swap(commands);ReleaseSRWLockExclusive(&commandLock);construction(t);if(fatal){ReleaseSRWLockExclusive(&stateLock);return 0;}actions(todo,t);dtmem::invalidate();if(fatal){ReleaseSRWLockExclusive(&stateLock);return 0;}bool hintsChanged=false;unsigned hintsChecked=0,hintsValid=0;operation="Dark placement hint scan";bool hintsOkay=placementHints.update(t,hintsChanged,hintsChecked,hintsValid);operation="idle";dtmem::invalidate();if(!hintsOkay){fatal=true;running=false;log("Pinned placement cache validation failed; plugin disabled");ReleaseSRWLockExclusive(&stateLock);return 0;}if(hintsChanged){char msg[140];snprintf(msg,sizeof(msg),"PLACEMENT_HINTS kind=%d checked=%u valid=%u automatic viewport scan",peek<int>(image+0x1086548),hintsChecked,hintsValid);log(msg);}{dtplacement::Hints::Diag d;int kind=0;dt::HintBox area;static uint64_t lastScanLog=0;static dtplacement::Hints::Diag lastLogged{};uint64_t now=GetTickCount64();
+}hasPendingLoad=false;ReleaseSRWLockExclusive(&ioLock);if(fatal)return;if(!restored&&(t>100||luaConstant("DT_IsNew")!=1)){fatal=true;running=false;say("This saved game cannot be continued. Start a new game of this scenario.");log("Unsupported save or missing sidecar; economy disabled");return;}state.tick=t;initialized=true;newMap=false;running=true;say(restored?"":"");fireStartPending=!restored;fireLoadPending=restored; /* r30: start-map farms in a citadel fire field on new maps; on a load, farms an older round left inside a field */log(restored?"State restored from matching save hash":"New Dark economy initialized");}
+static HRESULT __stdcall tick(DWORD,BOOL,BOOL){dtmem::Scope memoryScope;tickAt=GetTickCount64();dtdiag::beat(true,true);if(hdIsActive){hdActive=hdIsActive()!=FALSE;bool blocked=hdMouseBlocked()!=FALSE;if(blocked!=hdBlocked.exchange(blocked)){log(blocked?"HD_STATE mouse blocked by HD (panel hidden)":"HD_STATE mouse unblocked");}}bool match=signature();sceneMatches=match;if(fatal||!match){if(fatal&&match&&peek<uint32_t>(image+0xe66b14)>=10){AcquireSRWLockExclusive(&stateLock);offenceStopLocked();ReleaseSRWLockExclusive(&stateLock);}running=false;return 0;}uint32_t t=peek<uint32_t>(image+0xe66b14);if(t<10)return 0;if(!scenarioVersion()){running=false;return 0;}nativeTick=t;AcquireSRWLockExclusive(&stateLock);if(!initialized||newMap){initialize(t);if(!fatal)logStartingSectors();}if(fatal){offenceStopLocked();ReleaseSRWLockExclusive(&stateLock);return 0;}running=true;if(t<state.tick){initialized=false;running=false;ReleaseSRWLockExclusive(&stateLock);return 0;}state.tick=t;std::vector<Command> todo;AcquireSRWLockExclusive(&commandLock);todo.swap(commands);ReleaseSRWLockExclusive(&commandLock);construction(t);if(fatal){ReleaseSRWLockExclusive(&stateLock);return 0;}actions(todo,t);dtmem::invalidate();if(fatal){ReleaseSRWLockExclusive(&stateLock);return 0;}bool hintsChanged=false;unsigned hintsChecked=0,hintsValid=0;operation="Dark placement hint scan";bool hintsOkay=placementHints.update(t,hintsChanged,hintsChecked,hintsValid);operation="idle";dtmem::invalidate();if(!hintsOkay){fatal=true;running=false;log("Pinned placement cache validation failed; plugin disabled");ReleaseSRWLockExclusive(&stateLock);return 0;}if(hintsChanged){char msg[140];snprintf(msg,sizeof(msg),"PLACEMENT_HINTS kind=%d checked=%u valid=%u automatic viewport scan",peek<int>(image+0x1086548),hintsChecked,hintsValid);log(msg);}{dtplacement::Hints::Diag d;int kind=0;dt::HintBox area;static uint64_t lastScanLog=0;static dtplacement::Hints::Diag lastLogged{};uint64_t now=GetTickCount64();
  if(placementHints.report(d,kind,area)&&(now-lastScanLog>=5000)&&memcmp(&d,&lastLogged,sizeof(d))){lastScanLog=now;lastLogged=d;char msg[260];
-  snprintf(msg,sizeof(msg),"PLACEMENT_SCAN kind=%d view=%d,%d-%d,%d darkAnchors=%u valid=%u anchorFlags=%u (bits 01:%u 02:%u 04missing:%u 08:%u 10:%u 40:%u) terrain=%u footprintOrSlope=%u",
-   kind,area.left,area.top,area.right,area.bottom,d.dark,d.valid,d.flagged,d.bits[0],d.bits[1],d.bits[2],d.bits[3],d.bits[4],d.bits[6],d.terrain,d.footprint);log(msg);}}boardingOrders(t);unloadJobsTick(t);if(unloadTargeting.load()&&unloadGroup.empty())unloadTargeting=false;if(t%5==0){aircraftJobs(t);BYTE*land=peek<BYTE*>(image+0xd69220);if(readable(land,576*576*4)){for(uint32_t i=0;i<576*576;i++)if(land[4*i+2]&64)land[4*i+3]&=0xc0;}}
+  snprintf(msg,sizeof(msg),"PLACEMENT_SCAN kind=%d view=%d,%d-%d,%d darkAnchors=%u valid=%u anchorFlags=%u (bits 01:%u 02:%u 04missing:%u 08:%u 10:%u 40:%u) terrain=%u footprintOrSlope=%u fireBlockade=%u",
+   kind,area.left,area.top,area.right,area.bottom,d.dark,d.valid,d.flagged,d.bits[0],d.bits[1],d.bits[2],d.bits[3],d.bits[4],d.bits[6],d.terrain,d.footprint,d.fire);log(msg);}}boardingOrders(t);unloadJobsTick(t);offenceTick(t);if(unloadTargeting.load()&&unloadGroup.empty())unloadTargeting=false;if(t%5==0){aircraftJobs(t);BYTE*land=peek<BYTE*>(image+0xd69220);uint32_t cells=(uint32_t)side()*side();if(cells&&readable(land,cells*4)){for(uint32_t i=0;i<cells;i++)if(land[4*i+2]&64)land[4*i+3]&=0xc0;}}
 
  if(!dt::valid(state)){say("Dark Tribe stopped after an error. Please restart the game.");fatal=true;running=false;log("Resource conservation failure");}
  cachedSelection.clear();cachedFleet.clear();
@@ -594,20 +849,20 @@ static HRESULT __stdcall tick(DWORD,BOOL,BOOL){dtmem::Scope memoryScope;tickAt=G
  // terrain/objects and lets fade back when no longer refreshed. Aircraft
  // (class 0x40) are outside its class table, so add them the same way each tick.
  {uintptr_t fog=image+0x1159d30;int local=peek<int>(image+0xe9482c);using Circle=void(__thiscall*)(void*,int,int,int);
-  if(readable((void*)peek<uintptr_t>(fog+0xc),576*576))for(auto craft:cachedFleet){BYTE*q=entity(craft.id);if(!q||(q[32]>>4)!=local)continue;int ax,ay;position(craft.id,ax,ay);if(ax<2||ay<2||ax>=574||ay>=574)continue;((Circle)(image+0x1ae100))((void*)fog,ax,ay,dt::AircraftSight);}}
+  int n=side();if(n&&readable((void*)peek<uintptr_t>(fog+0xc),(size_t)n*n))for(auto craft:cachedFleet){BYTE*q=entity(craft.id);if(!q||(q[32]>>4)!=local)continue;int ax,ay;position(craft.id,ax,ay);if(ax<2||ay<2||ax>=n-2||ay>=n-2)continue;((Circle)(image+0x1ae100))((void*)fog,ax,ay,dt::AircraftSight);}}
  {std::vector<dt::UnitRef> live;for(auto u:fleetPick)if(aircraft(u.id)&&identity(u.id)==u.identity)live.push_back(u);fleetPick=live;chosenAircraft=live.empty()?0:live[0].id;chosenIdentity=live.empty()?0:live[0].identity;cachedPick=fleetPick;
   // Mirror the native 'selected' bit 0x200 (box select, RVA 0xED3EF) on picked
   // aircraft. Not 0x400: that bit makes Cart/Settler/Ship code refresh GUI
   // panels through virtual +0x94, which the 31-slot Manacopter vtable lacks.
   // The visible bracket is drawn by the mod (aircraftMarkers).
   for(auto craft:cachedFleet){BYTE*q=entity(craft.id);if(!q||identity(craft.id)!=craft.identity||!readable(q,0x18))continue;uint32_t&bits=*(uint32_t*)(q+0x14);bool want=picked(craft);uint32_t next=want?((bits|0x200u)&~0x400u):(bits&~0x600u);if(next!=bits)bits=next;}}
- view=View{};view.ready=true;view.buildMenu=constructionMenu();view.mana=mana();view.selected=selected();{BYTE*sel=entity(view.selected);view.kind=sel&&sel[10]==8&&owned(view.selected)?kind(view.selected):0;} /* building types only; settler type ids overlap (49-51) */view.selectedIdentity=identity(view.selected);
+ view=View{};view.ready=true;view.buildMenu=constructionMenu();view.mana=mana();view.selected=selected();{BYTE*sel=entity(view.selected);view.kind=sel&&sel[10]==8&&owned(view.selected)&&standing(view.selected)?kind(view.selected):0;} /* building types only; settler type ids overlap (49-51) */view.selectedIdentity=identity(view.selected);
  for(int c=0;c<4;c++)view.buildLimit[c]=buildingLimit.state((uint16_t)dtui::BuildTypes[c]); /* one Temple, one Fortress: their tiles are disabled while one exists */
 
  uint16_t nativeSelected=view.selected;
  if(chosenAircraft){view.selected=chosenAircraft;view.selectedIdentity=chosenIdentity;view.kind=0;view.isAircraft=true;auto*p=entity(chosenAircraft);int x,y;position(chosenAircraft,x,y);view.aircraftX=x;view.aircraftY=y;view.targetX=peek<uint16_t>((uintptr_t)p+0x48);view.targetY=peek<uint16_t>((uintptr_t)p+0x4a);if(draftIdentity!=chosenIdentity){draftX=x;draftY=y;draftIdentity=chosenIdentity;destinationControls=false;}view.coordinateMode=false;view.draftX=draftX;view.draftY=draftY;view.flightActive=(peek<uint16_t>((uintptr_t)p+0x4c)&1)!=0;uintptr_t a=peek<uintptr_t>((uintptr_t)p+0x58),b=peek<uintptr_t>((uintptr_t)p+0x5c);if(b>=a&&(b-a)%12==0&&(b-a)/12<=4096)view.passengers=(b-a)/12;view.landed=landed(chosenAircraft);view.aircraftHp=(uint8_t)std::max(1,dt::healthPercent(peek<uint8_t>((uintptr_t)p+0x21),dt::aircraftMaxHp(peek<int32_t>(image+dt::ManakopterHitpointsSetting))));passengerView(view);aircraftMarkers(view);view.unloadTargeting=unloadTargeting.load();aircraftPanelView(view);}
 if(view.selected&&view.selected!=lastSelection&&(view.kind==49||view.kind==50||view.kind==51||view.kind==80))buildOverride=false;lastSelection=nativeSelected;view.site=!view.isAircraft&&owned(view.selected)&&isSite(view.selected);if(!view.site&&(view.kind==50||view.kind==51)){auto*q=templeQueues(view.selected);view.recruitmentReady=q!=nullptr;if(q)memcpy(view.queues,q,sizeof(view.queues));}{uint64_t c=recruitChoice.load();if(c&&((uint16_t)(c>>8)!=view.selected||(uint32_t)(c>>32)!=view.selectedIdentity))recruitChoice.compare_exchange_strong(c,0);}view.recruitPick=recruitPick(view);if(view.kind==80){uint32_t first=0xffffffff;for(uint32_t i=0;i<state.aircraftCount;i++){auto&j=state.aircraft[i];if(j.hall==view.selected&&j.identity==view.selectedIdentity){view.aircraftCount++;first=std::min(first,j.readyAt);}}if(view.aircraftCount){uint32_t left=first>t?first-t:0;view.aircraftSeconds=(left+9)/10;view.progress=100-(std::min(left,300u)*100/300);}}unitPanelView(view);if(noticeAt.load()&&GetTickCount64()-noticeAt.load()<NoticeMs)strncpy(view.message,notice,sizeof(view.message)-1);ReleaseSRWLockExclusive(&stateLock);return 0;}
-static HRESULT __stdcall frame(LPDIRECTDRAWSURFACE7 surface,INT32 width,LPVOID){spriteFrame++;frameIngame=api->IsCurrentlyOnScreen(S4_SCREEN_INGAME)!=FALSE;frameAt=GetTickCount64();if(hdActive.load())return 0;if(fatal&&sceneMatches.load()&&frameIngame.load()){HDC dc=0;if(surface&&SUCCEEDED(surface->GetDC(&dc))){dtui::failure(dc,width);dtui::manaSection(dc,width,dtui::Data{});surface->ReleaseDC(dc);}return 0;}if(!running||!frameIngame.load())return 0;View v;if(!TryAcquireSRWLockShared(&stateLock))return 0;v=view;ReleaseSRWLockShared(&stateLock);if(!v.ready)return 0;v.recruitPick=recruitPick(v);pillar=width;bool detail=dthd::detail(v);bool build=buildOverride.load()||(!detail&&v.buildMenu);HDC dc=0;if(surface&&SUCCEEDED(surface->GetDC(&dc))){if(build)dtui::houseTab(dc,width);if(build||detail)dtui::render(dc,width,v,build);dtui::manaSection(dc,width,v);dtui::markersGdi(dc,v);if(v.unloadTargeting&&mouseX.load()>=0)dtui::badgeGdi(dc,mouseX.load()+14,mouseY.load()+14);surface->ReleaseDC(dc);}return 0;}
+static HRESULT __stdcall frame(LPDIRECTDRAWSURFACE7 surface,INT32 width,LPVOID){spriteFrame++;frameIngame=api->IsCurrentlyOnScreen(S4_SCREEN_INGAME)!=FALSE;frameAt=GetTickCount64();dtdiag::beat(frameIngame.load(),false);if(hdActive.load())return 0;if(fatal&&sceneMatches.load()&&frameIngame.load()){HDC dc=0;if(surface&&SUCCEEDED(surface->GetDC(&dc))){dtui::failure(dc,width);dtui::manaSection(dc,width,dtui::Data{});surface->ReleaseDC(dc);}return 0;}if(!running||!frameIngame.load())return 0;View v;if(!TryAcquireSRWLockShared(&stateLock))return 0;v=view;ReleaseSRWLockShared(&stateLock);if(!v.ready)return 0;v.recruitPick=recruitPick(v);pillar=width;bool detail=dthd::detail(v);bool build=buildOverride.load()||(!detail&&v.buildMenu);HDC dc=0;if(surface&&SUCCEEDED(surface->GetDC(&dc))){if(build)dtui::houseTab(dc,width);if(build||detail)dtui::render(dc,width,v,build);dtui::manaSection(dc,width,v);dtui::markersGdi(dc,v);if(v.unloadTargeting&&mouseX.load()>=0)dtui::badgeGdi(dc,mouseX.load()+14,mouseY.load()+14);surface->ReleaseDC(dc);}return 0;}
 // Cache actual drawn aircraft rectangles. No Lua, native mutation or waiting
 // on the economy lock occurs in rendering or input callbacks.
 static BOOL __stdcall blt(LPS4BLTPARAMS p,BOOL){
@@ -739,12 +994,12 @@ static HRESULT __stdcall send(DWORD position,S4_MOVEMENT_ENUM,LPVOID){
  return 0;
 }
 static DWORD WINAPI start(void*){char path[MAX_PATH];GetModuleFileNameA(ownModule,path,sizeof(path));std::string p(path);auto at=p.find_last_of("/\\");p=p.substr(0,at);at=p.find_last_of("/\\");p=p.substr(0,at);at=p.find_last_of("/\\");p=p.substr(0,at); // runtime/native/DarkTribe-0.2.15.dll -> project
- strncpy(root,p.c_str(),sizeof(root)-1);log("Native initialization started");image=(uintptr_t)GetModuleHandleW(L"S4_Main.exe");AddVectoredExceptionHandler(1,exceptionTrace);const GUID guid={0x05104b9f,0x52d3,0x4904,{0x8d,0x6f,0xa7,0xc3,0x01,0x2e,0xab,0xdd}};S4CreateInterface(&guid,&api);if(!api){fatal=true;log("S4CreateInterface failed");return 1;}log("S4ModApi interface ready");
+ strncpy(root,p.c_str(),sizeof(root)-1);log("Native initialization started");image=(uintptr_t)GetModuleHandleW(L"S4_Main.exe");{bool dumps=false;bool ready=dtdiag::start(root,image,&nativeTick,&operation,dumps);log(ready?(dumps?"Crash and freeze diagnostics ready: fatal exceptions with stacks, freeze watchdog, freeze dumps":"Crash and freeze diagnostics ready: fatal exceptions with stacks, freeze watchdog; freeze dumps unavailable"):"Crash and freeze diagnostics unavailable (log handle or watchdog)");}AddVectoredExceptionHandler(1,exceptionTrace);const GUID guid={0x05104b9f,0x52d3,0x4904,{0x8d,0x6f,0xa7,0xc3,0x01,0x2e,0xab,0xdd}};S4CreateInterface(&guid,&api);if(!api){fatal=true;log("S4CreateInterface failed");return 1;}log("S4ModApi interface ready");
  HMODULE bridge=GetModuleHandleW(L"S4ModApi.dll");luaBegin=(LuaBlock)GetProcAddress(bridge,"lua_beginblock");luaEnd=(LuaBlock)GetProcAddress(bridge,"lua_endblock");luaGlobal=(LuaGlobal)GetProcAddress(bridge,"lua_getglobal");luaNumber=(LuaNumber)GetProcAddress(bridge,"lua_getnumber");if(!luaBegin||!luaEnd||!luaGlobal||!luaNumber){fatal=true;log("Scenario marker Lua exports missing");return 5;}BYTE lookup[]={0xa1,0,0,0,0,0xf2,0x0f,0x2c,0xc8,0x8b,0x34,0x85};uint32_t slot=(uint32_t)(image+0x113fc98);memcpy(lookup+1,&slot,4);if(memcmp((void*)(image+0x1cb557),lookup,sizeof(lookup))){fatal=true;log("Pinned aircraft script lookup mismatch; plugin disabled");return 6;}BYTE board[]={0x55,0x8b,0xec,0x83,0xec,0x0c,0x53,0x8b,0x5d,0x08,0x56,0x57,0x8b,0xf9,0x8b,0x34};BYTE unload[]={0x55,0x8b,0xec,0x6a,0xff,0x68,0,0,0,0,0x64,0xa1,0,0,0,0};uint32_t seh=(uint32_t)(image+0xab9760);memcpy(unload+6,&seh,4);if(memcmp((void*)(image+0x16b890),board,sizeof(board))||memcmp((void*)(image+0x16b990),unload,sizeof(unload))){fatal=true;log("Pinned aircraft transport signatures mismatch");return 7;}if(!nativeConstructionIntact()){fatal=true;log("Pinned construction cancellation signature mismatch; plugin disabled");return 8;}{BYTE arrival[]={0x0f,0xb7,0x43,0x08,0x8b,0x0d,0,0,0,0,0x50,0xff,0x73,0x30,0xc6,0x43,0x42,0x0a,0xe8};uint32_t slotAddress=(uint32_t)(image+0x10540d4);memcpy(arrival+6,&slotAddress,4);
  BYTE readd[]={0x0f,0xb7,0x46,0x08,0x50,0x6a,0x01,0xe8};BYTE remove[]={0x55,0x8b,0xec,0x83,0xec,0x2c,0x8b,0x45,0x08,0x89,0x4d,0xfc};
  BYTE circle[]={0x55,0x8b,0xec,0x83,0xec,0x0c,0x8b,0x45,0x10,0x33,0xd2,0x53,0x8b,0x1d};BYTE band[]={0x51,0x50,0x52,0x8b,0xcb,0xe8};
  if(memcmp((void*)(image+0x1ae100),circle,sizeof(circle))||memcmp((void*)(image+0x1ae395),band,sizeof(band))||memcmp((void*)(image+0x189cd3),arrival,sizeof(arrival))||memcmp((void*)(image+0x132ebf),readd,sizeof(readd))||memcmp((void*)(image+0x16d720),remove,sizeof(remove))){fatal=true;log("Pinned passenger arrival signatures mismatch; plugin disabled");return 12;}}
- if(!nativeConstruction.initialize(image)){fatal=true;log("Pinned in-place construction signatures mismatch; plugin disabled");return 11;}log("Pinned native rise, reservation and completion verified; reserved cells checked for occupancy only; tick read cache r3; ordinary-site rise, aircraft group and sight r4; site panel, passengers and terrain sight r5; native temporary aircraft vision r6; aircraft right-click r7; aircraft selection marker r8; targeted unload r9; load nearby r10; radius 24 r11; site eviction r12; eviction and HD panel diagnostics r13; wild animals do not block r14; native-style Dark UI and Manacopter health r15; native game art menus r16; engine unit portraits r17; right-drag pan, text bounds and native recruitment cluster r18; player-facing texts only r19; mana section, aircraft panel and base limit r20; Hall panel like the aircraft panel r21; hidden outside a running map r22; placement scan diagnostics r23");if(!placementHints.initialize(image)){fatal=true;log("Pinned Dark placement signatures mismatch; plugin disabled");return 10;}log("Pinned Dark placement validator and marker cache verified");if(!nativeFarmIncomeIntact()||!installIncomeHook()){fatal=true;log("Pinned income signature mismatch; plugin disabled");return 2;}
+ if(!nativeConstruction.initialize(image)){fatal=true;log("Pinned in-place construction signatures mismatch; plugin disabled");return 11;}if(!nativeOffence.initialize(image)){fatal=true;log("Pinned computer offence signatures mismatch; plugin disabled");return 13;}offencePinned=true;log("Pinned native rise, reservation and completion verified; reserved cells checked for occupancy only; tick read cache r3; ordinary-site rise, aircraft group and sight r4; site panel, passengers and terrain sight r5; native temporary aircraft vision r6; aircraft right-click r7; aircraft selection marker r8; targeted unload r9; load nearby r10; radius 24 r11; site eviction r12; eviction and HD panel diagnostics r13; wild animals do not block r14; native-style Dark UI and Manacopter health r15; native game art menus r16; engine unit portraits r17; right-drag pan, text bounds and native recruitment cluster r18; player-facing texts only r19; mana section, aircraft panel and base limit r20; Hall panel like the aircraft panel r21; hidden outside a running map r22; placement scan diagnostics r23; Iron Kingdom scenario r24; The Alliance scenario and 512 maps r25; crash and freeze diagnostics r26; computer offence against the Dark Tribe r27; attack styles, re-attacks and territory greening r28; toolsmith shovel orders r29; citadel fire keep-off and farm blockade r30; clean start maps r31; scaled styles and protected convoy r32");if(!placementHints.initialize(image)){fatal=true;log("Pinned Dark placement signatures mismatch; plugin disabled");return 10;}log("Pinned Dark placement validator and marker cache verified");if(!nativeFarmIncomeIntact()||!installIncomeHook()){fatal=true;log("Pinned income signature mismatch; plugin disabled");return 2;}
  {wchar_t exe[MAX_PATH]{};GetModuleFileNameW(nullptr,exe,MAX_PATH);std::wstring dir(exe);dir=dir.substr(0,dir.find_last_of(L"/\\")+1)+L"Gfx\\";char line[220]; // Read-only: pinned byte ranges of the game's own GUI/Dark sprites.
   if(dtgfx::library().load(dir))snprintf(line,sizeof(line),"Native GUI art ready: %s",dtgfx::library().why);else snprintf(line,sizeof(line),"Native GUI art unavailable (%s); drawn panel style kept",dtgfx::library().why);log(line);}
  HMODULE hd=GetModuleHandleW(L"S4HD-Manager.dll");if(hd){
@@ -760,4 +1015,4 @@ static DWORD WINAPI start(void*){char path[MAX_PATH];GetModuleFileNameA(ownModul
  createA=peek<CreateA>(image+0xb15318);createW=peek<CreateW>(image+0xb15320);closeHandle=peek<Close>(image+0xb152d4);writeFile=peek<Write>(image+0xb1528c);
  if(!iat(0xb15318,(void*)openA,(void**)&createA)||!iat(0xb15320,(void*)openW,(void**)&createW)||!iat(0xb152d4,(void*)closeFile,(void**)&closeHandle)||!iat(0xb1528c,(void*)observedWrite,(void**)&writeFile)){fatal=true;log("Save hook initialization failed");return 3;}
  S4HOOK mapHook=api->AddMapInitListener(mapInit),tickHook=api->AddTickListener(tick),frameHook=api->AddFrameListener(frame),mouseHook=api->AddMouseListener(mouse),sendHook=api->AddSettlerSendListener(send),bltHook=api->AddBltListener(blt);if(!mapHook||!tickHook||!frameHook||!mouseHook||!sendHook||!bltHook){fatal=true;log("One or more required callbacks failed to install");return 4;}log("Version 0.2.15 native callbacks installed");return 0;}
-BOOL WINAPI DllMain(HINSTANCE module,DWORD reason,void*){if(reason==DLL_PROCESS_ATTACH){ownModule=module;DisableThreadLibraryCalls(module);HANDLE h=CreateThread(nullptr,0,start,nullptr,0,nullptr);if(h)CloseHandle(h);}return TRUE;}
+BOOL WINAPI DllMain(HINSTANCE module,DWORD reason,void*reserved){if(reason==DLL_PROCESS_ATTACH){ownModule=module;DisableThreadLibraryCalls(module);HANDLE h=CreateThread(nullptr,0,start,nullptr,0,nullptr);if(h)CloseHandle(h);}else if(reason==DLL_PROCESS_DETACH)dtdiag::processExit(reserved!=nullptr);return TRUE;}

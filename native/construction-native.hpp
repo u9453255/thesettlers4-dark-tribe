@@ -1,6 +1,7 @@
 #pragma once
 #include <windows.h>
 #include "fast-memory.hpp"
+#include "map-size.hpp"
 #include "construction-model.hpp"
 #include "footprints.hpp"
 #include "construction-signatures.hpp" // Private, generated from the pinned file.
@@ -34,8 +35,8 @@ class Native {
   uint16_t x=0,y=0;if(!read(p+24,x)||!read(p+26,y)||x!=j.x||y!=j.y)return 0;
   return role;
  }
- // Native map stride is 576 for every supported map; refuse anything else.
- bool cell(int x,int y,unsigned&at)const{uint32_t width=0;if(!read(image+0x1054138,width)||width!=576||x<1||y<1||x>=575||y>=575)return false;at=y*576+x;return true;}
+ // Native map stride (RVA 0x1054138) of a supported map size; refuse anything else.
+ bool cell(int x,int y,unsigned&at)const{int n=dtmap::size(image);if(!n||x<1||y<1||x>=n-1||y>=n-1)return false;at=y*n+x;return true;}
  // Same sector->economy lookup as RVA 0x1429F0 and the site tick head.
  uint16_t economy(uintptr_t p)const{
   uint32_t door=0;uintptr_t sectors=0;uint16_t sector=0,id=0;unsigned at=0;
@@ -112,9 +113,9 @@ class Native {
 public:
  // Mobile entities standing on the solid (blockPosLines) cells or the anchor.
  void blockers(const dt::Construction&j,std::vector<uint16_t>&out)const{
-  out.clear();auto*solid=dt::solidFootprint(j.kind);uintptr_t ground=0;if(!solid||!read(image+0x11630dc,ground)||!readable(ground,576*576*2))return;
-  for(int i=-1;i<solid->count;i++){int x=j.x+(i<0?0:solid->cells[i].x),y=j.y+(i<0?0:solid->cells[i].y);if(x<1||y<1||x>=575||y>=575)continue;
-   uint16_t id=0;if(!read(ground+2*(y*576+x),id)||!id||id==j.site||!mobile(id)||hidden(id))continue;if(std::find(out.begin(),out.end(),id)==out.end())out.push_back(id);}
+  out.clear();auto*solid=dt::solidFootprint(j.kind);uintptr_t ground=0;int n=dtmap::size(image);if(!n||!solid||!read(image+0x11630dc,ground)||!readable(ground,n*n*2))return;
+  for(int i=-1;i<solid->count;i++){int x=j.x+(i<0?0:solid->cells[i].x),y=j.y+(i<0?0:solid->cells[i].y);if(x<1||y<1||x>=n-1||y>=n-1)continue;
+   uint16_t id=0;if(!read(ground+2*(y*n+x),id)||!id||id==j.site||!mobile(id)||hidden(id))continue;if(std::find(out.begin(),out.end(),id)==out.end())out.push_back(id);}
  }
  struct Block {const char*reason="none";int x=0,y=0;uint16_t id=0;};
  bool initialize(uintptr_t module){
@@ -132,14 +133,15 @@ public:
   uintptr_t r=site(j);if(!r)return fail(dt::SiteSpace::Invalid,"site identity or native role",j.x,j.y);
   BYTE phase=0;int32_t level=0;if(!read(r+0x18c,phase)||!read(r+0x180,level))return dt::SiteSpace::Invalid;
   auto*body=dt::placementFootprint(j.kind);auto*solid=dt::solidFootprint(j.kind);if(!body||!solid)return dt::SiteSpace::Invalid;
-  uintptr_t flags=0,land=0,ground=0;if(!read(image+0x11630d8,flags)||!read(image+0x11630d4,land)||!read(image+0x11630dc,ground)||!readable(flags,576*576)||!readable(land,576*576*4)||!readable(ground,576*576*2))return dt::SiteSpace::Invalid;
+  int n=dtmap::size(image);if(!n)return dt::SiteSpace::Invalid;
+  uintptr_t flags=0,land=0,ground=0;if(!read(image+0x11630d8,flags)||!read(image+0x11630d4,land)||!read(image+0x11630dc,ground)||!readable(flags,n*n)||!readable(land,n*n*4)||!readable(ground,n*n*2))return dt::SiteSpace::Invalid;
   // Before the reservation, repeat the native placement acceptance. Once this
   // site owns its cells, native phase 7 checks only entity occupancy: objects
   // created nearby (e.g. planted mushrooms, RVA 0x163510) legitimately add the
   // keep-clear bit 0x40 to reserved cells and must not cancel the building.
   if(!claimed)for(int i=0;i<body->count;i++){
-   int x=j.x+body->cells[i].x,y=j.y+body->cells[i].y;if(x<1||y<1||x>=575||y>=575)return dt::SiteSpace::Invalid;
-   unsigned at=y*576+x;BYTE f=0,t=0,d=0;if(!read(flags+at,f)||!read(land+4*at+1,t)||!read(land+4*at+2,d))return dt::SiteSpace::Invalid;
+   int x=j.x+body->cells[i].x,y=j.y+body->cells[i].y;if(x<1||y<1||x>=n-1||y>=n-1)return dt::SiteSpace::Invalid;
+   unsigned at=y*n+x;BYTE f=0,t=0,d=0;if(!read(flags+at,f)||!read(land+4*at+1,t)||!read(land+4*at+2,d))return dt::SiteSpace::Invalid;
    // Reservation bit 8 and the native solid bit 2 are expected on a claimed site.
    unsigned mask=0x57;if(phase==2&&level>=0)mask&=~0x10;
    if(!(d&64)||!dt::darkBuildTerrain(t)||(f&mask)!=4)return fail(dt::SiteSpace::StaticBlocked,"terrain or static flags",x,y);
@@ -156,8 +158,8 @@ public:
   // Native phase 7 waits on the solid (blockPosLines) cells' entity map.
   dt::SiteSpace result=dt::SiteSpace::Clear;
   for(int i=-1;i<solid->count;i++){
-   int x=j.x+(i<0?0:solid->cells[i].x),y=j.y+(i<0?0:solid->cells[i].y);if(x<1||y<1||x>=575||y>=575)return dt::SiteSpace::Invalid;
-   uint16_t id=0;if(!read(ground+2*(y*576+x),id))return dt::SiteSpace::Invalid;if(!id||id==j.site)continue;
+   int x=j.x+(i<0?0:solid->cells[i].x),y=j.y+(i<0?0:solid->cells[i].y);if(x<1||y<1||x>=n-1||y>=n-1)return dt::SiteSpace::Invalid;
+   uint16_t id=0;if(!read(ground+2*(y*n+x),id))return dt::SiteSpace::Invalid;if(!id||id==j.site)continue;
    // Only another building is permanent. Settlers, aircraft, animals and
    // non-entity markers (native 0x20D870 treats 1..6 as transient) are waited
    // for, exactly as native phase 7 waits on this layer.

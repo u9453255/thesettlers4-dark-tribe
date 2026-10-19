@@ -1,0 +1,328 @@
+{
+  "version": "0.2.15",
+  "game_started": false,
+  "live_process_read": false,
+  "players": 4,
+  "mapSize": 512,
+  "darkBuildings": 1,
+  "fireCleanStart": {
+    "farmLock": 33,
+    "removedFarms": []
+  },
+  "darkUnits": 109,
+  "opponentBuildings": {
+    "roman": 15,
+    "viking": 16,
+    "maya": 11
+  },
+  "fieldArmy": 36,
+  "gardeners": 12,
+  "addedBarracks": {
+    "2": {
+      "x": 122,
+      "y": 364,
+      "entrance": [
+        126,
+        371
+      ],
+      "ground": {
+        "height": 5,
+        "cells": 66,
+        "step": 10
+      }
+    },
+    "3": {
+      "x": 367,
+      "y": 103,
+      "entrance": [
+        365,
+        105
+      ],
+      "ground": {
+        "height": 3,
+        "cells": 63,
+        "step": 4
+      }
+    },
+    "4": {
+      "x": 299,
+      "y": 272,
+      "entrance": [
+        298,
+        274
+      ],
+      "ground": {
+        "height": 2,
+        "cells": 51,
+        "step": 3
+      }
+    }
+  },
+  "addedToolsmiths": {
+    "2": {
+      "x": 137,
+      "y": 383,
+      "entrance": [
+        139,
+        385
+      ],
+      "ground": {
+        "height": 11,
+        "cells": 33,
+        "step": 7
+      }
+    },
+    "3": {
+      "x": 382,
+      "y": 96,
+      "entrance": [
+        383,
+        98
+      ],
+      "ground": {
+        "height": 7,
+        "cells": 36,
+        "step": 6
+      }
+    },
+    "4": {
+      "x": 298,
+      "y": 285,
+      "entrance": [
+        301,
+        287
+      ],
+      "ground": {
+        "height": 2,
+        "cells": 36,
+        "step": 6
+      }
+    }
+  },
+  "authoredGround": {
+    "levelled": "core",
+    "buildings": 37,
+    "step": 11
+  },
+  "barracksHeightsChanged": 227,
+  "barracksShadingsChanged": 277,
+  "supplyPiles": {
+    "2": [
+      {
+        "good": 34,
+        "amount": 8,
+        "x": 126,
+        "y": 374
+      },
+      {
+        "good": 34,
+        "amount": 8,
+        "x": 128,
+        "y": 374
+      },
+      {
+        "good": 8,
+        "amount": 8,
+        "x": 130,
+        "y": 374
+      },
+      {
+        "good": 8,
+        "amount": 8,
+        "x": 124,
+        "y": 374
+      },
+      {
+        "good": 31,
+        "amount": 8,
+        "x": 102,
+        "y": 355
+      },
+      {
+        "good": 31,
+        "amount": 8,
+        "x": 98,
+        "y": 357
+      },
+      {
+        "good": 20,
+        "amount": 8,
+        "x": 144,
+        "y": 385
+      },
+      {
+        "good": 20,
+        "amount": 8,
+        "x": 139,
+        "y": 379
+      },
+      {
+        "good": 10,
+        "amount": 8,
+        "x": 145,
+        "y": 387
+      },
+      {
+        "good": 10,
+        "amount": 8,
+        "x": 132,
+        "y": 378
+      },
+      {
+        "good": 18,
+        "amount": 2,
+        "x": 132,
+        "y": 380
+      }
+    ],
+    "3": [
+      {
+        "good": 34,
+        "amount": 8,
+        "x": 360,
+        "y": 100
+      },
+      {
+        "good": 34,
+        "amount": 8,
+        "x": 360,
+        "y": 102
+      },
+      {
+        "good": 8,
+        "amount": 8,
+        "x": 360,
+        "y": 106
+      },
+      {
+        "good": 5,
+        "amount": 8,
+        "x": 362,
+        "y": 108
+      },
+      {
+        "good": 31,
+        "amount": 8,
+        "x": 363,
+        "y": 116
+      },
+      {
+        "good": 31,
+        "amount": 8,
+        "x": 371,
+        "y": 116
+      },
+      {
+        "good": 20,
+        "amount": 8,
+        "x": 388,
+        "y": 99
+      },
+      {
+        "good": 20,
+        "amount": 8,
+        "x": 377,
+        "y": 92
+      },
+      {
+        "good": 10,
+        "amount": 8,
+        "x": 388,
+        "y": 97
+      },
+      {
+        "good": 10,
+        "amount": 8,
+        "x": 389,
+        "y": 101
+      },
+      {
+        "good": 18,
+        "amount": 2,
+        "x": 389,
+        "y": 103
+      }
+    ],
+    "4": [
+      {
+        "good": 34,
+        "amount": 8,
+        "x": 294,
+        "y": 274
+      },
+      {
+        "good": 34,
+        "amount": 8,
+        "x": 296,
+        "y": 276
+      },
+      {
+        "good": 8,
+        "amount": 8,
+        "x": 298,
+        "y": 278
+      },
+      {
+        "good": 6,
+        "amount": 8,
+        "x": 293,
+        "y": 269
+      },
+      {
+        "good": 31,
+        "amount": 8,
+        "x": 267,
+        "y": 276
+      },
+      {
+        "good": 31,
+        "amount": 8,
+        "x": 269,
+        "y": 276
+      },
+      {
+        "good": 20,
+        "amount": 8,
+        "x": 304,
+        "y": 288
+      },
+      {
+        "good": 20,
+        "amount": 8,
+        "x": 305,
+        "y": 287
+      },
+      {
+        "good": 10,
+        "amount": 8,
+        "x": 305,
+        "y": 290
+      },
+      {
+        "good": 10,
+        "amount": 8,
+        "x": 301,
+        "y": 282
+      },
+      {
+        "good": 18,
+        "amount": 2,
+        "x": 306,
+        "y": 289
+      }
+    ]
+  },
+  "extraCarriers": {
+    "2": 40,
+    "3": 40,
+    "4": 40
+  },
+  "rejectedSupplyMutations": 17,
+  "darkPlacementAnchors": {
+    "49": 6827,
+    "50": 25,
+    "51": 14,
+    "80": 29
+  },
+  "runtimeVerified": false
+}

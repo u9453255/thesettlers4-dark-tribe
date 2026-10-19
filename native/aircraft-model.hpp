@@ -7,7 +7,7 @@
 #include <utility>
 namespace dt {
 inline bool boardable(uint16_t kind){return kind==29||kind==32||kind==52||kind==54;}
-inline bool flightAllowed(uint32_t expected,uint32_t actual,int x,int y){return expected&&expected==actual&&x>0&&y>0&&x<575&&y<575;}
+inline bool flightAllowed(uint32_t expected,uint32_t actual,int x,int y,int size){return expected&&expected==actual&&x>0&&y>0&&x<size-1&&y<size-1;}
 // Restore even when a native request reports failure. Never retain a selected
 // aircraft in the engine's script-global last-created slot.
 struct ScopedAircraft {
@@ -99,9 +99,9 @@ inline std::vector<std::pair<int,int>> assignNearby(std::vector<LoadCraft> craft
  return out;
 }
 // Group destinations: distinct landing tiles around the clicked target.
-inline void groupTarget(int index,int x,int y,int&ox,int&oy){
+inline void groupTarget(int index,int x,int y,int size,int&ox,int&oy){
  static const int dx[]={0,5,-5,0,0,5,-5,5,-5,10,-10,0,0},dy[]={0,0,0,5,-5,5,-5,-5,5,0,0,10,-10};
- int i=index%13;ox=x+dx[i];oy=y+dy[i];if(ox<2)ox=2;if(oy<2)oy=2;if(ox>573)ox=573;if(oy>573)oy=573;
+ int i=index%13;ox=x+dx[i];oy=y+dy[i];if(ox<2)ox=2;if(oy<2)oy=2;if(ox>size-3)ox=size-3;if(oy>size-3)oy=size-3;
 }
 // Clear the low six fog bits (upper attribute bits kept) inside a circle,
 // clipped to the map. Same encoding as the Dark-land visibility pass.

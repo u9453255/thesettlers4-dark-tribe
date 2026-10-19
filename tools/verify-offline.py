@@ -3,6 +3,8 @@ import hashlib,importlib.util,json,struct,sys,tempfile,shutil,subprocess
 from pathlib import Path
 from game_build import ORIGINAL_SHA256, verify_executable, select_api
 from project_paths import original_building_xml, tool
+from scenarios import SCENARIOS, layouts
+import re
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'work/python'))
 import pefile
@@ -18,8 +20,19 @@ def run():
     node=tool('node')
     if not node:raise RuntimeError('Node.js not found: put node on PATH, set DARK_TRIBE_NODE or run python tools/setup.py --node <node.exe>')
     subprocess.run([node,str(ROOT/'tools/test-placement.cjs')],check=True)
+    subprocess.run([node,str(ROOT/'tools/test-iron-kingdom.cjs')],check=True)
+    checks.append('Iron Kingdom: two players, merged Dark camps, removed Trojans, owned Viking entrances and placeable Dark land')
+    subprocess.run([node,str(ROOT/'tools/test-alliance.cjs')],check=True)
+    checks.append('The Alliance: four players on a 512 map, three allied computer peoples on their own land, placeable Dark land')
+    header=(ROOT/'native/scenario-model.hpp').read_text(encoding='utf-8')
+    native_layouts=[]
+    for size,count,starts in re.findall(r'^ \{(\d+),(\d+),\{(.*?)\}\},',header,re.M):
+        players=tuple(tuple(map(int,s)) for s in re.findall(r'\{(\d+),(\d+),(\d+)\}',starts))
+        assert len(players)==int(count);native_layouts.append((int(size),players))
+    assert native_layouts==layouts(),(native_layouts,layouts())
+    checks.append('Native scene fingerprint and launcher helper accept exactly the scenario layouts of tools/scenarios.py')
     checks.append('All four original Dark masks reproduce stale clearing flags and pass repaired map without relaxing collision guards')
-    for script in ['test-game-build.py','inspect-united.py','inspect-hd-rendering.py','inspect-interactions.py','inspect-fortress.py','test-fortress.py','inspect-startup-sectors.py','inspect-placement.py','inspect-placement-hints.py','inspect-construction.py','inspect-startup-player.py','inspect-recruitment.py']:
+    for script in ['test-game-build.py','inspect-united.py','inspect-hd-rendering.py','inspect-interactions.py','inspect-fortress.py','test-fortress.py','inspect-startup-sectors.py','inspect-placement.py','inspect-placement-hints.py','inspect-construction.py','inspect-offence.py','inspect-startup-player.py','inspect-recruitment.py']:
         subprocess.run([sys.executable,str(ROOT/'tools'/script)],check=True)
     checks.append('Actual native Dark collision flags/terrain and all masks; automatic tick-only viewport hints using the native sparse cache; relocation and ABI guards')
     checks.append('Pinned Fortress crash path, explicit no-tool enum and preserved native role/geometry/data')
@@ -40,6 +53,12 @@ def run():
     for name in ['README.md','MAIN.md','TESTING.md','HANDOFF.md']:
         assert 'Dark Tribe 0.2.15 ready' in (ROOT/name).read_text(encoding='utf-8'),name
     checks.append('Combined release 0.2.15 runtime, loader, installer, helper mutex/status and user readiness labels')
+    dll=(ROOT/'runtime/native/DarkTribe-0.2.15.dll').read_bytes()
+    for marker in [b'crash and freeze diagnostics r26',b'FATAL_EXCEPTION code=',b'HEAP_FAILURE type=',b'FREEZE_WATCH ready main thread ',b'FREEZE_DUMP written ',b'PROCESS_EXIT ']:assert marker in dll,marker
+    assert 'dtdiag::exception(p)' in native_source and 'dtdiag::beat(true,true)' in native_source and 'dtdiag::processExit(' in native_source
+    diagnostics=json.loads((ROOT/'research/diagnostics-checks.json').read_text(encoding='utf-8'))
+    assert diagnostics['game_started'] is False and diagnostics['heap_double_free_failure_type']==8 and diagnostics['freeze_dump_valid_with_main_thread']
+    checks.append('Crash and freeze diagnostics r26 in the DLL; fixture run (fault, heap double free, stack overflow, freeze with dump) recorded without starting the game')
     exe=pefile.PE(m['game_executable'])
     game_build=verify_executable(m['game_executable'])
     assert game_build['sha256']==m['game_sha256'] and m['game_code_sha256']==ORIGINAL_SHA256
@@ -74,10 +93,13 @@ def run():
         deps[name]=libraries
     assert (ROOT/'runtime/native/NoUpdateForS4ModApi.txt').is_file()
     checks.append('Runtime hashes, API exports, x86 architecture and bundled/Windows dependencies')
-    lua=(ROOT/'scenario/DarkTribe_FirstDawn.txt').read_text()
-    assert 'DT_Version = 200' in lua
-    for obsolete in ['DT_Economy','DT_Commands','DT_PadClear','Settlers.AddSettlers','Vars.Save3']:assert obsolete not in lua
-    assert lua.count('Magic.IncreaseMana')==1
+    for scenario in SCENARIOS:
+        lua=(ROOT/scenario['script']).read_text()
+        assert 'DT_Version = 200' in lua and 'DT_IsNew = 1' in lua and 'Game.EnemyPlayersLost(1)' in lua,scenario['script']
+        for obsolete in ['DT_Economy','DT_Commands','DT_PadClear','Settlers.AddSettlers','Vars.Save3']:assert obsolete not in lua
+        assert lua.count('Magic.IncreaseMana')==1
+        # The game's Lua predates for loops (no shipped map script uses them).
+        assert not re.search(r'\bfor\b.*\bdo\b',lua),scenario['script']
     checks.append('Version-scoped scenario without waves, timed credits or one-use farm logic')
     spec=importlib.util.spec_from_file_location('installer',ROOT/'tools/install.py');installer=importlib.util.module_from_spec(spec);spec.loader.exec_module(installer)
     original_root=installer.ROOT
@@ -101,9 +123,14 @@ def run():
         for sub in ['backups','research','work/generated/GameData']:(project/sub).mkdir(parents=True,exist_ok=True)
         shutil.copy2(ROOT/'research/building-compatibility.json',project/'research/building-compatibility.json')
         shutil.copy2(ROOT/'work/generated/GameData/buildingInfo.xml',project/'work/generated/GameData/buildingInfo.xml')
+        for scenario in SCENARIOS:
+            for relative in [scenario['generated'],scenario['script']]:
+                (project/relative).parent.mkdir(parents=True,exist_ok=True);shutil.copy2(ROOT/relative,project/relative)
         entries=[];upgrade=bool(real_manifest)
         if real_manifest:
-            for index,entry in enumerate(real_manifest['entries']):
+            # An installation made before the newest scenario lacks its entry: the installer must add it.
+            newest=Path(SCENARIOS[-1]['installed']).name
+            for index,entry in enumerate(e for e in real_manifest['entries'] if Path(e['destination']).name!=newest):
                 e=dict(entry);dest=game/Path(entry['destination']).relative_to(Path(real_manifest['game']));dest.parent.mkdir(parents=True,exist_ok=True)
                 backup=project/'backups'/Path(e['backup']).name
                 if e['existed']:shutil.copy2(e['backup'],backup)
@@ -112,18 +139,20 @@ def run():
                 if index==0:shutil.copy2(e['source'],dest)
                 elif previous.exists():shutil.copy2(previous,dest)
                 else:
-                    upgrade=False  # no v0.1 files on this machine: start from the original state instead
+                    # Scenarios newer than 0.1 never had a v0.1 file; for First Dawn its absence means
+                    # no v0.1 files on this machine: start from the original state instead.
+                    if index<3:upgrade=False
                     if e['existed']:shutil.copy2(backup,dest)
                 entries.append(e)
             temp_manifest={'game':str(game.resolve()),'entries':entries}
             (project/'backups/install-manifest.json').write_text(json.dumps(temp_manifest))
             installer.ROOT=project
             installer.install(game,None)
+            entries=json.loads((project/'backups/install-manifest.json').read_text())['entries']
+            assert any(Path(e['destination']).name==newest for e in entries),'Upgrade did not add the new scenario'
         else:
             # First install from the untouched original game XML; the installer writes its own manifest.
             (game/'GameData').mkdir(parents=True);shutil.copy2(original_building_xml(),game/'GameData/buildingInfo.xml')
-            for relative in ['work/generated/Map/User/DarkTribe_FirstDawn.map','scenario/DarkTribe_FirstDawn.txt']:
-                (project/relative).parent.mkdir(parents=True,exist_ok=True);shutil.copy2(ROOT/relative,project/relative)
             installer.ROOT=project
             installer.install(game,None)
             entries=json.loads((project/'backups/install-manifest.json').read_text())['entries']

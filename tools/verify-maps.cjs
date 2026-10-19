@@ -19,3 +19,16 @@ for(let i=1;i<=12;i++) {
 const project=path.resolve(__dirname,'..');fs.mkdirSync(path.join(project,'research'),{recursive:true});
 fs.writeFileSync(path.join(project,'research/map-validation.json'),JSON.stringify(results,null,2));
 console.log('PASS: '+results.length+' maps, byte-identical reconstruction and metadata recompression');
+// Clean start of every scenario in tools/scenarios.py (r31, also future ones): no Dark Mushroom Farm within FarmLock
+// (Euclid 33, citadel-fire.cjs = native/citadel-fire.hpp) of a Dark Temple/Fortress fire centre in the generated map.
+const {execFileSync}=require('child_process'),{python}=require('./project-paths.cjs');
+const {checkNative,assertNoFarmInFire,buildingRows,FarmLock,FARM,citadelKind}=require('./citadel-fire.cjs');
+checkNative(project);
+const scenarios=JSON.parse(execFileSync(python(),['-c','import json,sys;sys.path.insert(0,sys.argv[1]);from scenarios import SCENARIOS;print(json.dumps(SCENARIOS))',__dirname],{encoding:'utf8'}));
+assert(scenarios.length>=3,'Scenario list');
+const clean=scenarios.map(s=>{
+  const b=readMap(path.join(project,s.generated)).chunks.find(c=>c.type===8).data,rows=buildingRows(b);
+  assertNoFarmInFire(b,s.title);
+  return `${s.title} (${rows.filter(r=>r.type===FARM).length} farms, ${rows.filter(r=>citadelKind(r.type)).length} Temple/Fortress)`;
+});
+console.log(`PASS: clean start maps, no Dark farm within FarmLock ${FarmLock} of a Temple/Fortress fire centre: ${clean.join(', ')}`);

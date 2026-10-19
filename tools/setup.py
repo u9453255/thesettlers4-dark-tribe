@@ -21,6 +21,7 @@ from pathlib import Path
 
 import project_paths as paths
 from game_build import BUNDLED_API_SHA256, select_api, verify_executable, verify_hd
+from scenarios import SCENARIOS
 
 ROOT = paths.ROOT
 SDK_ROOT = ROOT / 'work/native-sdk'
@@ -29,7 +30,6 @@ API_PIN = dict(url='https://github.com/nyfrk/S4ModApi/releases/download/v2.3/S4M
                sha256='11dd2c51aeccc23aab5e4bb597762a6cc010111bbf310c80debf6dfaf1821254')
 API_FILES = ('S4ModApi.dll', 'S4ModApi.lib', 'S4ModApi.h', 'COPYING.txt', 'COPYING.LESSER.txt', 'README.md')
 MODULES = {'pefile': 'pefile', 'capstone': 'capstone', 'dnfile': 'dnfile', 'dncil': 'dncil', 'Pillow': 'PIL', 'lupa': 'lupa'}
-CAMPAIGN_MAP_SHA256 = '237a1df871a31818e00496a8b1b802cb414902136657aeb5e10561c11ec854fb'  # Map/Campaign/dark03.map
 problems = []
 
 
@@ -139,8 +139,10 @@ def game(folder):
         report(True, 'GameData/buildingInfo.xml', 'pinned original' + (' (install backup)' if source.is_relative_to(ROOT) else ''))
     except (RuntimeError, OSError) as error:
         report(False, 'GameData/buildingInfo.xml', str(error))
-    campaign = folder / 'Map/Campaign/dark03.map'
-    report(campaign.is_file() and sha256(campaign) == CAMPAIGN_MAP_SHA256, 'Map/Campaign/dark03.map', 'pinned original' if campaign.is_file() and sha256(campaign) == CAMPAIGN_MAP_SHA256 else 'missing or different')
+    for scenario in SCENARIOS:  # each playable scenario is generated from one original campaign map
+        campaign = folder / scenario['source']
+        ok = campaign.is_file() and sha256(campaign) == scenario['source_sha256']
+        report(ok, scenario['source'], ('pinned original' if ok else 'missing or different') + ' (source of ' + scenario['title'] + ')')
     installed = folder / 'S4ModApi.dll'
     if installed.is_file():
         try:

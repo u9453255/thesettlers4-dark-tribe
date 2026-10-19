@@ -5,6 +5,30 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 def digest(p): return hashlib.sha256(p.read_bytes()).hexdigest()
 
+def targets(game):
+    """Installed files in manifest order: compatibility XML, First Dawn map and script copy, then the other scenario maps."""
+    from scenarios import SCENARIOS
+    first=SCENARIOS[0]
+    return [(ROOT/'work/generated/GameData/buildingInfo.xml',game/'GameData/buildingInfo.xml'),
+            (ROOT/first['generated'],game/first['installed']),(ROOT/first['script'],game/'Script/DarkTribe_FirstDawn.txt'),
+            *[(ROOT/s['generated'],game/s['installed']) for s in SCENARIOS[1:]]]
+
+def add_entry(entries,src,dst):
+    """Back up whatever already exists at the destination, then record the file to install there."""
+    backup=ROOT/'backups'/('original-'+str(len(entries))+'-'+dst.name)
+    existed=dst.exists()
+    if existed: shutil.copy2(dst,backup)
+    entries.append(dict(source=str(src),destination=str(dst.resolve()),backup=str(backup),existed=existed,original_sha256=digest(backup) if existed else None,installed_sha256=digest(src)))
+
+def upgrade(manifest,game):
+    """Add files of scenarios released after this installation (existing entries stay untouched)."""
+    known={str(Path(e['destination']).resolve()).lower() for e in manifest['entries']}
+    added=[]
+    for src,dst in targets(game):
+        if str(dst.resolve()).lower() not in known:
+            add_entry(manifest['entries'],src,dst);added.append(dst.name)
+    return added
+
 def install(game, profile):
     report=json.loads((ROOT/'research/building-compatibility.json').read_text())
     destination=game/'GameData/buildingInfo.xml'
@@ -14,15 +38,11 @@ def install(game, profile):
     if manifest_path.exists():
         manifest=json.loads(manifest_path.read_text())
         if manifest['game']!=str(game.resolve()): raise RuntimeError('Backup belongs to another game folder')
+        if upgrade(manifest,game): manifest_path.write_text(json.dumps(manifest,indent=2))
     else:
         if digest(destination)!=report['source_sha256']: raise RuntimeError('Unexpected game XML; regenerate against this installation')
         entries=[];(ROOT/'backups').mkdir(exist_ok=True)  # absent in a fresh checkout
-        targets=[(source,destination),(ROOT/'work/generated/Map/User/DarkTribe_FirstDawn.map',game/'Map/User/00_Dark_Tribe_First_Dawn.map'),(ROOT/'scenario/DarkTribe_FirstDawn.txt',game/'Script/DarkTribe_FirstDawn.txt')]
-        for i,(src,dst) in enumerate(targets):
-            backup=ROOT/'backups'/('original-'+str(i)+'-'+dst.name)
-            existed=dst.exists()
-            if existed: shutil.copy2(dst,backup)
-            entries.append(dict(source=str(src),destination=str(dst.resolve()),backup=str(backup),existed=existed,original_sha256=digest(backup) if existed else None,installed_sha256=digest(src)))
+        for src,dst in targets(game): add_entry(entries,src,dst)
         manifest=dict(game=str(game.resolve()),entries=entries)
         manifest_path.write_text(json.dumps(manifest,indent=2))
     (ROOT/'save-states').mkdir(exist_ok=True)
@@ -40,7 +60,7 @@ def install(game, profile):
         assert digest(dst)==e['installed_sha256']
     (ROOT/'runtime').mkdir(exist_ok=True)
     (ROOT/'runtime/active.json').write_text(json.dumps(dict(version='0.2.15',game=str(game.resolve()))))
-    print('Installed scenario and compatibility XML; originals preserved in',ROOT/'backups')
+    print('Installed the scenarios and compatibility XML; originals preserved in',ROOT/'backups')
 
 def restore():
     manifest=json.loads((ROOT/'backups/install-manifest.json').read_text())
@@ -53,7 +73,7 @@ def restore():
         if e['existed']: shutil.copy2(e['backup'],dst)
         else: dst.unlink(missing_ok=True)
     (ROOT/'runtime/active.json').unlink(missing_ok=True)
-    print('Restored original XML and removed only this scenario')
+    print('Restored original XML and removed only the scenarios of this mod')
 
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('action',choices=['install','restore']);p.add_argument('--game',type=Path,default=None);p.add_argument('--profile',type=Path,default=Path.home()/'Documents/TheSettlers4');a=p.parse_args()

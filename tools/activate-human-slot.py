@@ -6,6 +6,7 @@ Offsets are pinned to the locally inspected 2.50.1516.0 x86 build.
 import argparse,ctypes,hashlib,json,struct,sys
 from pathlib import Path
 from game_build import ORIGINAL_SHA256, verify_executable
+from scenarios import layouts
 from ctypes import wintypes as W
 from importlib.util import spec_from_file_location,module_from_spec
 ROOT=Path(__file__).resolve().parents[1]
@@ -16,9 +17,12 @@ def activate(pid):
     pin=json.loads((ROOT/'research/native-build-pin.json').read_text())
     actual=verify_executable(report['executable'])
     if pin['sha256']!=ORIGINAL_SHA256 or actual['code_sha256']!=pin['sha256']:raise RuntimeError('Game build differs from inspected binary')
-    a,b=report['players']
-    if not matches_layout(report):raise RuntimeError('Wrong scenario layout')
-    if a['0x90']!=0 or b['0x90']!=1 or report['skipFlags'][:2]!=[0,0]:raise RuntimeError('Unexpected player slot types')
+    if not matches_layout(report):
+        # Name what the game reported, so a refused layout can be told apart in session-helper.jsonl.
+        seen=[(q.get('0x18c'),q.get('0xfc'),q.get('0x120')) for q in report.get('players',[])]
+        raise RuntimeError(f"Wrong scenario layout: players={report.get('playerCount')} {seen} mapSize={report.get('mapSize')}")
+    players=report['players'];a=players[0]
+    if a['0x90']!=0 or any(q['0x90']!=1 for q in players[1:]) or any(report['skipFlags'][:len(players)]):raise RuntimeError('Unexpected player slot types')
     if report['hostId']!=0:raise RuntimeError('Only the offline local host is supported')
     if report['localPlayer'] not in (0,1):raise RuntimeError('Unexpected local player')
     if a['0xd8']==0:return report
@@ -40,12 +44,13 @@ def activate(pid):
     return checked
 
 def matches_layout(report):
-    """Exact new-scenario layout or unchanged legacy layout for paired old saves."""
-    if report.get('playerCount')!=2 or len(report.get('players',[]))!=2:return False
-    a,b=report['players']
-    return (a.get('0x18c')==3 and b.get('0x18c')==1
-            and (a.get('0xfc'),a.get('0x120'))==(277,214)
-            and (b.get('0xfc'),b.get('0x120')) in ((75,401),(261,279)))
+    """Exact layout of one of this mod's scenarios (tools/scenarios.py), including the legacy First Dawn save layout."""
+    players=report.get('players',[])
+    if report.get('playerCount')!=len(players):return False
+    actual=tuple((q.get('0x18c'),q.get('0xfc'),q.get('0x120')) for q in players)
+    # Players, races and starts only: the slot must be assigned in the lobby, before the map loads, and the
+    # map size (view size RVA 0xD6921C) is only written while the map loads. The plugin checks the size in game.
+    return any(actual==starts for size,starts in layouts())
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('pid',type=int);a=p.parse_args();activate(a.pid);print('First Dawn human slot assigned to the offline local host')
+    p=argparse.ArgumentParser();p.add_argument('pid',type=int);a=p.parse_args();activate(a.pid);print('Dark Tribe human slot assigned to the offline local host')

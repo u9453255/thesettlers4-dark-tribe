@@ -1,0 +1,18 @@
+{
+  "version": "0.2.15",
+  "round": "r26",
+  "process": "disposable non-game x86 fixture",
+  "first_chance_fault_with_stack": true,
+  "repeated_fault_address_without_second_stack": true,
+  "cxx_exception_not_logged": true,
+  "heap_double_free_failure_type": 8,
+  "heap_failure_stack_from_ntdll_record": true,
+  "stack_overflow_logged_with_stack": true,
+  "freeze_reported_between_10_and_12_5_s": true,
+  "freeze_window_not_responding": true,
+  "freeze_stack_in_hung_function": true,
+  "freeze_dump_valid_with_main_thread": true,
+  "freeze_end_logged": true,
+  "orderly_exit_logged": true,
+  "game_started": false
+}

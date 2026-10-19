@@ -35,3 +35,7 @@ The user tested the combined package and it crashed at tick 31. The former radiu
 ## 0.2.6 prepared-terrain correction
 
 Owner 2 initialization remains. Preserve original resources and non-prepared flags, but clear obsolete 0x43 blocking bits in explicitly flattened/object-cleared footprints and the authored Dark clearing. Preserving stale flags there caused the 0.2.5 Farm-only placement regression; see PLACEMENT_COURIERS_026.md. Native runtime collision and halo guards remain.
+
+## r31: clean Dark start (First Dawn)
+
+`tools/build-scenario.cjs` removes the Dark start farm at 337,282 (Euclid 18.3 from the fire centre of the Temple at 340,300; FarmLock 33, `tools/citadel-fire.cjs` = `native/citadel-fire.hpp`) after the opponent is prepared. It also clears the flags baked under it (0x08/0x01/0x02 on its 52 footprint cells). The other 7 start farms, every other Dark record, the Viking layout and all other map bytes are unchanged (`tools/test-scenario.cjs`). In r30 this farm was crushed at the start (`FARM_FIRE_REMOVED 337,282 reason=start`); on the new map that line no longer appears.

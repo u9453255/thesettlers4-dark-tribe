@@ -1,4 +1,4 @@
-"""Launcher-only helper: load verified native modules, then assign the First Dawn human slot."""
+"""Launcher-only helper: load verified native modules, then assign the Dark Tribe human slot of a scenario of this mod."""
 import ctypes,json,time,subprocess,threading
 from pathlib import Path
 from ctypes import wintypes as W

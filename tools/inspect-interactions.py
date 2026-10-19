@@ -77,11 +77,11 @@ def run():
     # flag, not a site; jobs: not refunded); a second site is refused before
     # payment with mode 1; command 1 and the tiles read the tick's counts.
     limit=source.split('static dt::BuildingLimit buildingLimit;',1)[1].split('static void aircraftJobs',1)[0]
-    assert 'dt::countJobs(limit,state)' in limit and 'dt::discoverConstruction(j,t,ops,limit)' in limit and 'buildingLimit=limit;' in limit
+    assert 'dt::countJobs(limit,state)' in limit and 'dt::discoverConstruction(j,t,ops,limit,&fire)' in limit and 'buildingLimit=limit;' in limit
     assert '!(peek<uint32_t>((uintptr_t)p+0x14)&0x4000000))limit.countBuilt(k)' in limit and limit.count('for(uint32_t id=1;id<65536;id++)')==1
     assert 'if(buildingLimit.exists((uint16_t)c.arg)){say(dt::limitNotice((uint16_t)c.arg));continue;}' in source
     assert 'view.buildLimit[c]=buildingLimit.state(' in source
-    assert 'refuseConstruction(j,ops,ConstructionEvent::Duplicate)' in model and 'if(!j.refunded)limit.countBuilding(j.kind);' in model
+    assert 'refuseConstruction(j,ops,ConstructionEvent::Duplicate)' in model and 'if(!j.refunded){limit.countBuilding(j.kind);' in model
     assert 'return refuseConstruction(j,ops,ConstructionEvent::Unpaid);' in model
     # Native farm credit has a read-only signature guard, never a mod detour.
     farm_guard=source.split('static bool nativeFarmIncomeIntact(){',1)[1].split('static void position',1)[0]
@@ -103,7 +103,7 @@ def run():
     transport=source.split('static void requestBoarding(',1)[1].split('static const char* passengerName',1)[0]
     assert 'for(auto unit:selectedUnits)' in transport and 'for(uint32_t id=1;id<65536' not in transport
     assert 'eligiblePassenger(o.unit)' in transport and 'dt::sameEntity(o.craft' in transport
-    assert 'ground+2*(y*576+x)' in source
+    assert 'ground+2*(y*n+x)' in source and 'int n=side();' in source  # entity map indexed with the running map's stride
     report=dict(version='0.2.15',game_sha256=game_build['sha256'],game_code_sha256=ORIGINAL_SHA256,game_started=False,live_process_read=False,
         native_direct_income_rva='0x389C0',old_hook_is_ai_catchup=True,
         direct_income_bypasses_old_hook=True,native_farm_income_untouched=True,

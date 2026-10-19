@@ -6,8 +6,9 @@
 #include <vector>
 #include <math.h>
 int main(){
- assert(dt::flightAllowed(4,4,1,574));assert(!dt::flightAllowed(4,5,20,20));assert(!dt::flightAllowed(0,0,20,20));
- for(int edge:{0,575,65535,-1}){assert(!dt::flightAllowed(4,4,edge,20));assert(!dt::flightAllowed(4,4,20,edge));}
+ assert(dt::flightAllowed(4,4,1,574,576));assert(!dt::flightAllowed(4,5,20,20,576));assert(!dt::flightAllowed(0,0,20,20,576));
+ assert(dt::flightAllowed(4,4,1,510,512)&&!dt::flightAllowed(4,4,1,511,512)&&!dt::flightAllowed(4,4,1,574,512));
+ for(int edge:{0,575,65535,-1}){assert(!dt::flightAllowed(4,4,edge,20,576));assert(!dt::flightAllowed(4,4,20,edge,576));}
  assert(dt::boardable(29));assert(dt::boardable(32));assert(dt::boardable(54));assert(dt::boardable(52));assert(!dt::boardable(53));uint32_t last=20;{dt::ScopedAircraft a(last,10);assert(last==10);{dt::ScopedAircraft b(last,30);assert(last==30);}assert(last==10);}assert(last==20);
  // Skewed isometric-like projection: map x=(sx+sy/2)/32, y=sy/16, camera offset 100,50.
  auto proj=[](int sx,int sy,int out[2]){out[0]=100+(int)lround((sx+sy*0.5)/32.0);out[1]=50+(int)lround(sy/16.0);};
@@ -22,8 +23,8 @@ int main(){
  assert(dt::pickHit(box,cx-150,cy-150,cx+150,cy+150));   // drag box around it
  assert(!dt::pickHit(box,cx+200,cy+200,cx+400,cy+400));  // drag box elsewhere
  assert(!dt::boxSelect(10,10,14,15)&&dt::boxSelect(10,10,30,10));
- int seen[13][2];for(int i=0;i<13;i++){dt::groupTarget(i,300,300,seen[i][0],seen[i][1]);for(int j=0;j<i;j++)assert(seen[i][0]!=seen[j][0]||seen[i][1]!=seen[j][1]);}
- int ex,ey;dt::groupTarget(1,573,1,ex,ey);assert(ex==573&&ey==2);
+ int seen[13][2];for(int i=0;i<13;i++){dt::groupTarget(i,300,300,576,seen[i][0],seen[i][1]);for(int j=0;j<i;j++)assert(seen[i][0]!=seen[j][0]||seen[i][1]!=seen[j][1]);}
+ int ex,ey;dt::groupTarget(1,573,1,576,ex,ey);assert(ex==573&&ey==2);dt::groupTarget(1,509,1,512,ex,ey);assert(ex==509&&ey==2);
  {static uint8_t land[64*64*4];for(int i=0;i<64*64;i++){land[4*i+3]=0xff;land[4*i+2]=0x11;}
   int n=dt::revealCircle(land,64,2,2,dt::AircraftSight);assert(n>0);
   assert(land[4*(2*64+2)+3]==0xc0&&land[4*(2*64+2)+2]==0x11);           // centre revealed, attributes kept

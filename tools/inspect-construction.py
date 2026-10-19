@@ -7,7 +7,7 @@ from construction_pins import PINS,generate
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'work/python'))
 import capstone,pefile
-DATA_PINS={0xc591bc,0xc59284,0xc58ae8,0xc593d0,0x14236c,0xc585e4+0x40}
+DATA_PINS={0xc591bc,0xc59284,0xc58ae8,0xc593d0,0x14236c,0xc585e4+0x40,0xc585e4+0x10,0xc58ae8+0x2c}
 
 def run():
     executable=game_exe();pin=verify_executable(executable)
@@ -105,6 +105,36 @@ def run():
     assert 'bool wild=q&&cls==0x80' in growth and 'if(wild&&i>=0)continue;' in growth  # r14: wild animals only block the anchor
     assert 'if(!reserved)reserve(' in growth and 'removePiles(r,p)' in growth and 'economy(p)' in growth
     assert 'SiteSpace::MobileBlocked' in model and 'ConstructionEvent::LegacyCancelled' in model
+    # r30 citadel fire blockade and start-map farm removal. Lua CrushBuilding
+    # (S4ModApi BuildingsCrush, the player's own demolition) jumps to the mode-1
+    # removal 0x136960, which skips the economy notify for race 3 and calls
+    # Kill 0x16D030(id, attacker 0). Kill calls CBuilding slot 4 (0x1361D0) on
+    # the same tick; slot 4 calls 0x13C680, which decrements the ready counter
+    # [0x10EF624+idx*8] (role slot +0x70 true) or the site counter. Attacker 0
+    # skips Kill's statistics; the Farm role's slot 11 (0x145050) credits
+    # MushroomFarmsDestroyed only to a non-zero building byte +0x25.
+    ordered(rows(0x1c4d4c,0x23),('mov','ecx, dword ptr [ecx*4 + 0x129bc38]'),('cmp','byte ptr [ecx + 0xa], 8'),('test','dword ptr [ecx + 0x14], 0x4000000'),('je','0x536960'),('ret',''))
+    ordered(rows(0x136a26,0x58),('cmp','al, 3'),('je','0x536a68'),('push','0'),('push','eax'),('call','0x56d030'),('jmp','dword ptr [eax + 0x2c]'))
+    assert rows(0x16d1c7,7)==[('mov','eax, dword ptr [esi]'),('mov','ecx, esi'),('call','dword ptr [eax + 0x10]')]
+    assert dword(0xc585e4+0x10)==base+0x1361d0 and dword(0xc58ae8+0x2c)==base+0x145050
+    assert rows(0x1362a9,10)==[('movzx','eax, word ptr [esi + 8]'),('push','eax'),('call','0x53c680')]
+    ordered(rows(0x13c719,0x5d),('call','dword ptr [eax + 0x70]'),('dec','dword ptr [esi*8 + 0x14ef624]'),('dec','dword ptr [0x14eea70]'))
+    assert ('dec','dword ptr [esi*8 + 0x14ef620]') in rows(0x13c77f,7)
+    ordered(rows(0x145050,0x23),('movzx','eax, byte ptr [eax + 0x25]'),('test','eax, eax'),('je','0x545070'),('inc','dword ptr [eax]'))
+    blockade=(ROOT/'native/blockade-model.hpp').read_text(encoding='utf-8')
+    fire=(ROOT/'native/citadel-fire.hpp').read_text(encoding='utf-8')
+    hints=(ROOT/'native/placement-native.hpp').read_text(encoding='utf-8')
+    assert 'FarmLock=FireLine+FarmReach+2' in fire and 'dtfire::farmTooClose(' in blockade and 'constexpr' not in blockade  # one shared geometry
+    assert 'refuseConstruction(j,ops,ConstructionEvent::FireBlocked)' in model and 'if(fire)fire->add(j.kind,j.x,j.y);' in model
+    sweep=source.split('static bool fireSweep(',1)[1].split('static void construction(',1)[0]
+    assert 'api->BuildingsCrush(id)' in sweep and 'FARM_FIRE_REMOVED' in sweep and '0x136a80' not in sweep.lower() and 'BuildingsDelete' not in sweep
+    assert 'fireStartPending=!restored;' in source and source.count('fireStartPending=')==3
+    assert 'dt::discoverConstruction(j,t,ops,limit,&fire);' in source and 'if(start||load)fireSweep(farms,fire,load);' in source
+    # r30 review: a restored save sweeps once too (pre-r30 farms inside a field), logged with reason=load
+    assert 'fireLoadPending=restored;' in source and source.count('fireLoadPending=')==3 and 'load=fireLoadPending&&!start;' in source
+    assert 'load?"load":"start"' in sweep and 'if(!start&&!load)for(auto id:farms)' in source
+    assert 'placementHints.blockWith(&fireBlockade);' in source and 'say(dt::fireNotice(j.kind))' in source
+    assert 'self.blockade->blocked(type,x,y)' in hints
     report=dict(version='0.2.15',game_sha256=pin['sha256'],game_started=False,live_process_read=False,
         successful_construction='same native site completes in place; no delete/recreate',
         site_role_vtable_rva='0xC591BC',phase_dispatch='2..8; mod freezes at 1',grow_kinds=[49,80],
