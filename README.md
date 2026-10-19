@@ -1,6 +1,6 @@
 # Dark Tribe for The Settlers IV
 
-A single-player mod for **The Settlers IV: History Edition** that makes the Dark Tribe playable. Mushroom Farmers deliver mushrooms for mana, and you spend that mana on Dark buildings (Mushroom Farm, Dark Temple, Fortress, Manacopter Hall), troops and Manacopters that carry units. The computer opponents attack you with their own soldiers and Gardeners: the soldiers clear your defenders, the Gardeners turn the ground around your buildings green until they collapse, Mushroom Farms first and your Temple and Fortress only once no farm is left, while your citadel's fire defence protects it as long as farms stand. They attack early and in several ways (raids, full assaults, pincers, sweeps of Gardeners under escort, hunts for your army, and joint attacks of allied computers), replace lost armies from their own barracks, and their Gardeners steadily take back Dark land, first inside their own territory. Three scenarios:
+A single-player mod for **The Settlers IV: History Edition** that makes the Dark Tribe playable. Mushroom Farmers deliver mushrooms for mana, and you spend that mana on Dark buildings (Mushroom Farm, Dark Temple, Fortress, Manacopter Hall), troops and Manacopters that carry units. The computer opponents attack you with their own soldiers and Gardeners: the soldiers clear your defenders, the Gardeners turn the ground around your buildings green until they collapse, Mushroom Farms first and your Temple and Fortress only once no farm is left. They attack early and in six ways (raids, full assaults, pincers, sweeps of Gardeners under escort, hunts for your army, and joint attacks of allied computers). Every style grows with the size of their army, and soldiers and Gardeners march together so the Gardeners stay protected. Lost armies are replaced from their own barracks, their toolsmiths make the shovels for new Gardeners, and their Gardeners steadily take back Dark land, first inside their own territory. Three scenarios:
 
 - **First Dawn** (`00_Dark_Tribe_First_Dawn`): your Dark base against a Viking settlement in the west. The introduction.
 - **Iron Kingdom** (`01_Dark_Tribe_Iron_Kingdom`): two Dark camps against a fully built Viking kingdom with seventeen manned towers, mines and weaponsmiths, whose army grows the longer you wait.
@@ -42,6 +42,8 @@ python tools\workflow.py
 2. Stay in the main menu until the launcher window prints **Dark Tribe 0.2.15 ready**.
 3. Choose Single Player, click the map picture, then Custom Maps. Start a new **`00_Dark_Tribe_First_Dawn`**, **`01_Dark_Tribe_Iron_Kingdom`** or **`02_Dark_Tribe_The_Alliance`** game. Keep player 1 human (Dark Tribe), all other players computer, and the races unchanged.
 
+**Your citadel's fire field.** While you own at least one Mushroom Farm, your Dark Temple and Fortress burn enemy soldiers and Gardeners on Dark land within 18 to 24 tiles (more farms, wider field; the visible flames show less). The computers stay out of it and attack your farms first. Their turn for the Temple and Fortress comes when your last farm falls. A Mushroom Farm can't be built within 33 tiles of your Temple or Fortress: a farm there could never be attacked, and the field would never drop.
+
 Always start the mod through `Launch Dark Tribe.cmd`. A normal game start does not load it. A save consists of the game's `.sav` (in `Documents\TheSettlers4\Save`) and a matching sidecar in `save-states\`. Keep them together.
 
 ## Uninstall
@@ -58,6 +60,7 @@ Open this repository in [Claude Code](https://claude.com/claude-code) with **Cla
 
 - [TESTING.md](TESTING.md): in-game test steps for the current release
 - [MAIN.md](MAIN.md): behaviour, installation details and limits
-- [MODLOG.md](MODLOG.md): history of every release
+- [CHANGELOG.md](CHANGELOG.md): what changed for players, update by update
+- [MODLOG.md](MODLOG.md): detailed development journal of every release and round
 - [HANDOFF.md](HANDOFF.md), [AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md): notes for continuing development
 - Third-party code: [S4ModApi](https://github.com/nyfrk/S4ModApi) (LGPL, `runtime/native/COPYING*`, header in `third_party/`), the Settlers.ts map codec (MIT, `tools/vendor/`)
