@@ -31,6 +31,19 @@ int main(){
   assert(land[4*(2*64+(2+15))+3]==0xc0&&land[4*(2*64+(2+26))+3]==0xff);  // radius edge
   assert(land[4*(40*64+40)+3]==0xff&&dt::revealCircle(land,64,2,2,15)==0); // far cell untouched; idempotent
   assert(dt::revealCircle(land,64,63,63,15)>0);}                            // clipped at map edge
+ {static uint8_t fog[16];for(int i=0;i<16;i++)fog[i]=(uint8_t)(0xc0|(i%8)<<3|(i%8));assert(dt::revealPending(fog,16)==14&&fog[0]==0xc0&&fog[3]==0xc3&&fog[9]==0xc1&&dt::revealPending(fog,16)==0&&dt::revealPending(nullptr,16)==0);} /* r42: pending cleared, base and counter kept */
+ {bool was=false;assert(!dt::pressed(false,was)&&dt::pressed(true,was)&&!dt::pressed(true,was)&&!dt::pressed(false,was)&&dt::pressed(true,was));} /* r42: one edge per press */
+ assert(dt::unloadExit(0)==3&&dt::unloadExit(5)==2&&dt::unloadExit(-1)==2&&dt::unloadExit(-3)==0&&dt::unloadExit(-4)==-1&&dt::unloadExit(0x7f)==4&&dt::unloadExit((signed char)0xfe)==1); // r39: the native exit record
+ {// Dark-land sight: reclaimed cells go back to the native fog merge.
+  static uint8_t land[16*4],fog[16],shown[16];for(int i=0;i<16;i++){land[4*i+2]=0x11;land[4*i+3]=0xdb;fog[i]=0xff;shown[i]=0;}
+  land[4*3+2]|=0x40;land[4*4+2]|=0x40;
+  auto r=dt::darkSight(land,fog,shown,16);assert(r.revealed==2&&r.returned==0);
+  assert(land[4*3+3]==0xc0&&land[4*3+2]==0x51&&shown[3]&&shown[4]&&land[4*5+3]==0xdb&&fog[3]==0xff); // Dark visible, fog bytes untouched
+  land[4*3+2]=0x11;r=dt::darkSight(land,fog,shown,16);                                                   // cell 3 greened
+  assert(r.revealed==1&&r.returned==1&&!shown[3]&&fog[3]==0x3f&&land[4*3+3]==0xc0&&fog[5]==0xff);       // counter cleared, merge decides
+  r=dt::darkSight(land,fog,shown,16);assert(r.returned==0&&fog[3]==0x3f);                               // once only
+  land[4*4+2]=0x11;r=dt::darkSight(land,nullptr,shown,16);assert(r.returned==0&&shown[4]);              // no fog map: kept for later
+  for(int i=0;i<16;i++)shown[i]=1;r=dt::darkSight(land,fog,shown,16);assert(r.returned==16&&fog[0]==0x3f&&fog[4]==0x3f);} // full re-check
  {// Inverse projection solver against a skewed projection with "height" bumps.
   auto proj=[](int sx,int sy,int out[2]){double h=3.0*sin(sx/90.0)*cos(sy/70.0);out[0]=100+(int)floor((sx+(sy+h)*0.5)/32.0);out[1]=50+(int)floor((sy+h)/16.0);};
   for(int tx=105;tx<=130;tx+=5)for(int ty=55;ty<=90;ty+=7){int sx=-1,sy=-1;assert(dt::solveScreen(proj,1024,768,tx,ty,sx,sy));int m[2];proj(sx,sy,m);assert(m[0]==tx&&m[1]==ty);}

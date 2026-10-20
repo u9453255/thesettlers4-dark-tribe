@@ -1,9 +1,10 @@
 # Research and evidence index
 
-Updated 2026-10-19. Start with `../HANDOFF.md` for current decisions and `../MAIN.md` for current functionality.
+Updated 2026-10-20. Start with `../HANDOFF.md` for current decisions and `../MAIN.md` for current functionality.
 
 | File | Evidence and scope |
 |---|---|
+| `DARK_SIGHT_FOG_0215.md`, `construction-inplace-checks.json` | r35: why reclaimed green land stayed lit (the native fog merge 0x1AE3F0 skips 8-cell groups with three stable cycles), the fog byte/land byte 3 layout, the counter hand-back fix and its pins; gameplay unverified |
 | `AI_OFFENCE_0215.md`, `offence-native-checks.json` | Why the computer AI never attacks the Dark Tribe (target filters, no damage path, fire defence), the mod-owned native squad, mirrored attack timing/strength, farms-first targeting, siege and credited destroy; r28: six attack styles, pressure, native soldier supply (barracks/weapons/carriers), territory owner and own-territory greening, flag 0x80; r29: toolsmith shovel orders; r30: the citadel fire re-derived (Euclidean disc, Temple/Fortress only, flames at 16 vs kills to 24), keep-off rules, fire routing and guard, field evidence of fire losses; r32: style sizes and gardener counts scaled with the army, the convoy that keeps gardeners with the soldiers (checked by `tools/inspect-offence.py`); gameplay unverified |
 | `CRASH_DIAGNOSTICS_0215.md`, `diagnostics-checks.json` | r26: the vanilla `lua_close` double free on map exit (not Dark Tribe), heap-free crash/freeze diagnostics, the disposable fixture and the offline dump reader |
 | `ALLIANCE_0215.md`, `alliance-build.json`, `alliance-checks.json` | r25 The Alliance (dark07, 512x512, four players), 512-map support, r27 gardeners and r28 start supply (barracks, weapons, shovels, carriers, levelled ground); r31 clean-start check |

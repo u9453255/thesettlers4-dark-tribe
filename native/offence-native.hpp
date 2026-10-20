@@ -89,12 +89,16 @@ public:
   if(!e||!read(e+4,uid)||!foundation(uid)||!read(e+10,cls)||cls!=8||!read(e+12,type)||type!=kind||!read(e+32,owner)||owner!=0x13||!read(e+0x14,bits)||!(bits&0x2000000)||(bits&0x4000000)||!read(e+0x50,role)||!read(role,vt))return false;
   return vt==image+(kind==49?0xc58ae8:kind==80?0xc593d0:0xc59284);
  }
- void targets(int wanted,std::vector<Target>&out)const{
+ // r33: with the sector home (hx, hy) a target's walking path is checked (detour()): a path longer than
+ // detourLimit(hex distance) or none makes it unreachable; detour = walking steps beyond the hex distance.
+ void targets(int wanted,std::vector<Target>&out,int hx=0,int hy=0,uint32_t now=0){
   out.clear();static const uint16_t kinds[]={Farm,Temple,Fortress,Hall};std::vector<std::pair<int,int>> dark;fighters(dark);
   for(uint16_t kind:kinds){uint32_t head=0;if(!read(image+0x10eea74+(DarkPlayer*0x53+kind)*4,head))continue; /* per-player building list, next word +0x2A */
    uint16_t id=(uint16_t)head;for(int guard=0;id&&guard<2048;guard++){uintptr_t e=entity(id);if(!e)break;uint16_t next=value<uint16_t>(e+0x2a);
     if(darkBuilding(e,kind)){Target t;t.id=id;t.kind=kind;t.uid=value<uint32_t>(e+4);t.x=value<uint16_t>(e+24);t.y=value<uint16_t>(e+26);uint32_t door=value<uint32_t>(e+0x48);t.doorX=door&0xffff;t.doorY=door>>16;
-     int r=region(t.doorX,t.doorY);t.reachable=r&&r==wanted;for(auto&d:dark)if(distance(d.first,d.second,t.doorX,t.doorY)<=RaidRadius)t.defence+=2;out.push_back(t);}
+     int r=region(t.doorX,t.doorY);t.reachable=r&&r==wanted;for(auto&d:dark)if(distance(d.first,d.second,t.doorX,t.doorY)<=RaidRadius)t.defence+=2;
+     if(t.reachable&&hx>0){int hex=distance(t.doorX,t.doorY,hx,hy),path=detour(t,wanted,hx,hy,now);if(path<0||(path>0&&tooLong(path,hex)))t.reachable=false;else if(path>0)t.detour=std::max(0,path-hex);}
+     out.push_back(t);}
     id=next;}}
  }
  bool alive(const Target&t)const{uintptr_t e=entity(t.id);return e&&value<uint32_t>(e+4)==t.uid&&darkBuilding(e,t.kind);}
@@ -212,6 +216,9 @@ public:
      WORK start failure 0x17974E and the give-up 0x1799B7 do not clear it). */
   g.work=job==0xaf?Work::Working:(job==50||(job==0xb0&&task==17))?Work::Idle:task==31?Work::Searching:Work::Busy;
   g.reservedX=job==0xaf?rx:-1;g.reservedY=job==0xaf?ry:-1;
+  /* r33: job 0xB0 = a WATCH order (0x179B90 tests event +0xC & 4, pushes 0xB0 and leaves the work centre +0x38/+0x3C
+     alone; 0x179BC5 stores the destination y<<16|x at role +0x18 for both orders): an escorted (parked) gardener. */
+  g.escorted=job==0xb0;if(g.escorted){uint32_t d=value<uint32_t>(role+0x18);g.destX=(int)(d&0xffff);g.destY=(int)(d>>16);}
   /* r30: the search 0x179F80 writes its chosen cell to +0x40/+0x44 (0x17A116/0x17A119) before it pushes
      job 0xAF (greening, adjacent) or 0xAE (walking to it): the aimed cell under both jobs. */
   g.aimX=(job==0xae||job==0xaf)?rx:-1;g.aimY=(job==0xae||job==0xaf)?ry:-1;
@@ -294,15 +301,16 @@ public:
  // cells per player and 16x16 block; a full pass takes side/rows ticks. Territory claims never skip
  // Dark cells (0x20CD30) and the human's Dark land spreads into computer territory (0x175199).
  static constexpr int Block=16,Blocks=36;
- uint16_t building[9][Blocks*Blocks]={},owned[9][Blocks*Blocks]={};int scanRow=0,scanSide=0;bool scanned=false;
- void resetTerritory(){memset(building,0,sizeof(building));memset(owned,0,sizeof(owned));scanRow=0;scanSide=0;scanned=false;}
+ uint16_t building[9][Blocks*Blocks]={},owned[9][Blocks*Blocks]={};int scanRow=0,scanSide=0,rise[9]={};bool scanned=false; /* r33: rise = growth of a player's owned Dark cells over the last full pass */
+ void resetTerritory(){memset(building,0,sizeof(building));memset(owned,0,sizeof(owned));memset(rise,0,sizeof(rise));scanRow=0;scanSide=0;scanned=false;walks.clear();walkAt=0;}
  void scanTerritory(int rows){
   int n=dtmap::size(image);if(!n||n>Blocks*Block)return;if(n!=scanSide){resetTerritory();scanSide=n;}
   uintptr_t fl=0,map=0;if(!read(image+0x11630d8,fl)||!read(image+0xef1a18,map)||!fl||!map||!readable(fl,(size_t)n*n)||!readable(map,(size_t)n*n*2)||!readable(image+0xef1a20,0x8000*20))return;
   for(int r=0;r<rows;r++){int y=scanRow;
    for(int x=0;x<n;x++){BYTE f=*(BYTE*)(fl+y*n+x);if((f&0x05)!=0x04)continue;uint16_t tile=*(uint16_t*)(map+2*(y*n+x));if(tile>=0x8000)continue;
     int p=*(uint32_t*)(image+0xef1a20+tile*20u)&15;if(p<2||p>8)continue;uint16_t&k=building[p][(y/Block)*Blocks+x/Block];if(k<0xffff)k++;}
-   if(++scanRow>=n){scanRow=0;memcpy(owned,building,sizeof(owned));memset(building,0,sizeof(building));scanned=true;}}
+   if(++scanRow>=n){scanRow=0;for(int p=2;p<=8;p++){int was=0,now=0;for(int b=0;b<Blocks*Blocks;b++){was+=owned[p][b];now+=building[p][b];}rise[p]=scanned?now-was:0;}
+    memcpy(owned,building,sizeof(owned));memset(building,0,sizeof(building));scanned=true;}}
  }
  int ownedDark(uint8_t p)const{int t=0;if(p>=2&&p<=8)for(auto k:owned[p])t+=k;return t;}
  // Nearest workable Dark cell of player p's territory: the blocks with owned Dark land nearest first
@@ -322,6 +330,95 @@ public:
   return false;
  }
  bool reach(int x,int y,int wanted)const{return wanted&&region(x,y)==wanted;}
+ // r33: a cell in or near player p's territory, as the native intruder test 0x1B17E0 decides it (re-implemented, never
+ // called): the cell's owner is p, or a cell up to 4 steps along one of the six directions is (its 16x16 block fast path
+ // 0xEEF998 only shortcuts the same answer).
+ bool inside(uint8_t p,int x,int y)const{if(owner(x,y)==p)return true;static const int nx[6]={1,-1,0,0,1,-1},ny[6]={0,0,1,-1,1,-1};for(int k=0;k<6;k++)for(int r=1;r<=4;r++)if(owner(x+r*nx[k],y+r*ny[k])==p)return true;return false;}
+ // r33: the Dark presence in player p's territory (dtoffence::Intrusion): Dark Gardeners (type 52, group 7) and Dark
+ // Warriors/Throwers/Shamans (29/32/54, groups 2/3/4) of player 1, visible (flags & 0x3000000, not hidden 0x8000) and
+ // alive, standing in or near the territory in land region wanted; the owned Dark cells and their rise (scanTerritory).
+ // Computer soldiers attack groups 2..9 except 1 (Mushroom Farmers, slaves): CAIAgentIntruderCombat's own type table
+ // 0xBF0438 (46, 48, 49, 47, 50, 45) has no Dark type, so the director leads the defence.
+ void intrusion(uint8_t p,int wanted,Intrusion&in)const{
+  in=Intrusion{};if(p<2||p>8)return;in.own=ownedDark(p);in.rise=rise[p];static const uint16_t types[]={52,29,32,54};
+  for(uint16_t type:types){uint32_t head=0;if(!read(image+0x1144cec+(DarkPlayer*0x43+type)*4,head))continue;
+   uint16_t id=(uint16_t)head;for(int guard=0;id&&guard<4096;guard++){uintptr_t e=entity(id);if(!e)break;uint16_t next=value<uint16_t>(e+0x2a);
+    uint32_t bits=value<uint32_t>(e+0x14);BYTE cls=value<BYTE>(e+10),who=value<BYTE>(e+32),hp=value<BYTE>(e+33);
+    if(cls==1&&value<uint16_t>(e+12)==type&&(who>>4)==DarkPlayer&&hp&&(bits&0x3000000)&&!(bits&0x4000000)&&!(bits&0x8000)){int x=value<uint16_t>(e+24),y=value<uint16_t>(e+26);
+     if((!wanted||region(x,y)==wanted)&&inside(p,x,y))(type==52?in.gardeners:in.fighters).push_back({x,y});}
+    id=next;}}
+ }
+ // r33: walking steps from (fx,fy) to within 2 of (tx,ty) over cells of land region wanted (six neighbours, the region
+ // word as region() reads it), at most limit steps: -1 when not reached within limit (or no way at all), 0 unknown
+ // (no map, no region). A breadth-first search with a stamped visit map (one per call, at most n*n cells).
+ std::vector<uint32_t> seen;uint32_t stamp=0;
+ int walk(int fx,int fy,int tx,int ty,int wanted,int limit){
+  int n=dtmap::size(image);uintptr_t map=0;if(!n||!wanted||!read(image+0xef1a18,map)||!map||!readable(map,(size_t)n*n*2)||!readable(image+0xef1a24,0x8000*20))return 0;
+  if(seen.size()!=(size_t)n*n){seen.assign((size_t)n*n,0);stamp=0;}if(++stamp==0){std::fill(seen.begin(),seen.end(),0);stamp=1;}
+  auto land=[&](int x,int y){if(x<1||y<1||x>=n-1||y>=n-1)return false;uint16_t tile=*(uint16_t*)(map+2*(size_t)(y*n+x));return tile<0x8000&&*(uint16_t*)(image+0xef1a24+tile*20u)==(uint16_t)wanted;};
+  static const int nx[6]={1,-1,0,0,1,-1},ny[6]={0,0,1,-1,1,-1};std::vector<int> cur,next;
+  if(fx<1||fy<1||fx>=n-1||fy>=n-1)return 0;
+  /* no land cell of the region within 2 of the goal (a home off the region): unknown, never "unreachable" */
+  bool goal=false;for(int dy=-2;dy<=2&&!goal;dy++)for(int dx=-2;dx<=2&&!goal;dx++)if(distance(0,0,dx,dy)<=2&&land(tx+dx,ty+dy))goal=true;if(!goal)return 0;
+  cur.push_back(fy*n+fx);seen[fy*n+fx]=stamp;
+  for(int steps=0;steps<=limit&&!cur.empty();steps++){
+   for(int at:cur){int x=at%n,y=at/n;if(distance(x,y,tx,ty)<=2)return steps;
+    for(int k=0;k<6;k++){int px=x+nx[k],py=y+ny[k];if(!land(px,py))continue;int q=py*n+px;if(seen[q]==stamp)continue;seen[q]=stamp;next.push_back(q);}}
+   cur.swap(next);next.clear();}
+  return -1;
+ }
+ // r37: walking steps from (fx,fy) to within 2 of every reachable target's door in one breadth-first search over the land
+ // region wanted (the goal cells are stamped like the visit map; a door disc already claimed by an earlier target takes
+ // that target's path): path = steps (at least 1), -1 none within limit, 0 unknown (no map, no region, a target not
+ // reachable from home). One search per call; the model calls it once per decision or retarget.
+ std::vector<uint32_t> goalSeen;std::vector<uint16_t> goalOf;uint32_t goalStamp=0;
+ void walkAll(int fx,int fy,int wanted,int limit,std::vector<Target>&out){
+  int n=dtmap::size(image);uintptr_t map=0;for(auto&t:out)t.path=0;
+  if(!n||!wanted||!read(image+0xef1a18,map)||!map||!readable(map,(size_t)n*n*2)||!readable(image+0xef1a24,0x8000*20)||fx<1||fy<1||fx>=n-1||fy>=n-1)return;
+  if(seen.size()!=(size_t)n*n){seen.assign((size_t)n*n,0);stamp=0;}if(++stamp==0){std::fill(seen.begin(),seen.end(),0);stamp=1;}
+  if(goalSeen.size()!=(size_t)n*n){goalSeen.assign((size_t)n*n,0);goalOf.assign((size_t)n*n,0);goalStamp=0;}if(++goalStamp==0){std::fill(goalSeen.begin(),goalSeen.end(),0);goalStamp=1;}
+  auto land=[&](int x,int y){if(x<1||y<1||x>=n-1||y>=n-1)return false;uint16_t tile=*(uint16_t*)(map+2*(size_t)(y*n+x));return tile<0x8000&&*(uint16_t*)(image+0xef1a24+tile*20u)==(uint16_t)wanted;};
+  std::vector<int> alias(out.size(),-1);int pending=0;
+  for(size_t i=0;i<out.size()&&i<0xffff;i++){Target&t=out[i];if(!t.reachable)continue;bool own=false;
+   for(int dy=-2;dy<=2;dy++)for(int dx=-2;dx<=2;dx++){int x=t.doorX+dx,y=t.doorY+dy;if(distance(0,0,dx,dy)>2||!land(x,y))continue;size_t q=(size_t)y*n+x;
+    if(goalSeen[q]!=goalStamp){goalSeen[q]=goalStamp;goalOf[q]=(uint16_t)i;own=true;}else if(alias[i]<0)alias[i]=goalOf[q];}
+   t.path=-1;if(own)pending++;}
+  if(!pending)return;static const int nx[6]={1,-1,0,0,1,-1},ny[6]={0,0,1,-1,1,-1};std::vector<int> cur,next;cur.push_back(fy*n+fx);seen[fy*n+fx]=stamp;int found=0;
+  for(int steps=0;steps<=limit&&!cur.empty()&&found<pending;steps++){
+   for(int at:cur){if(goalSeen[at]==goalStamp){Target&t=out[goalOf[at]];if(t.path<0){t.path=std::max(1,steps);found++;}}
+    int x=at%n,y=at/n;for(int k=0;k<6;k++){int px=x+nx[k],py=y+ny[k];if(!land(px,py))continue;int q=py*n+px;if(seen[q]==stamp)continue;seen[q]=stamp;next.push_back(q);}}
+   cur.swap(next);next.clear();}
+  for(size_t i=0;i<out.size();i++)if(out[i].path<0&&alias[i]>=0&&out[alias[i]].path>0)out[i].path=out[alias[i]].path;
+ }
+ // r38: the walking steps from (fx,fy) to (tx,ty): a breadth-first field from the goal over the land region wanted
+ // (steps per cell, 0xFFFF unreachable), kept for the last WalkFields goals (a march reads the same goal every director
+ // step; a new leg costs one search). -1 = no walk, 0 = unknown (no map, no region, off the map).
+ static constexpr int WalkFields=4;
+ struct WalkField {int gx=-1,gy=-1,wanted=0,n=0;uint32_t used=0;std::vector<uint16_t> steps;};WalkField fields[WalkFields];uint32_t fieldClock=0;
+ int walkSteps(int fx,int fy,int tx,int ty,int wanted){
+  int n=dtmap::size(image);uintptr_t map=0;if(!n||!wanted||fx<1||fy<1||fx>=n-1||fy>=n-1||tx<1||ty<1||tx>=n-1||ty>=n-1)return 0;
+  WalkField*f=nullptr;for(auto&w:fields)if(w.gx==tx&&w.gy==ty&&w.wanted==wanted&&w.n==n)f=&w;
+  if(!f){if(!read(image+0xef1a18,map)||!map||!readable(map,(size_t)n*n*2)||!readable(image+0xef1a24,0x8000*20))return 0;
+   for(auto&w:fields)if(!f||w.used<f->used)f=&w;f->gx=tx;f->gy=ty;f->wanted=wanted;f->n=n;f->steps.assign((size_t)n*n,0xffff);
+   auto land=[&](int x,int y){if(x<1||y<1||x>=n-1||y>=n-1)return false;uint16_t tile=*(uint16_t*)(map+2*(size_t)(y*n+x));return tile<0x8000&&*(uint16_t*)(image+0xef1a24+tile*20u)==(uint16_t)wanted;};
+   static const int nx[6]={1,-1,0,0,1,-1},ny[6]={0,0,1,-1,1,-1};std::vector<int> cur,next;
+   /* the goal disc (within 2) starts at 0: a group order ends around its cell, as walk() counts arrivals */
+   for(int dy=-2;dy<=2;dy++)for(int dx=-2;dx<=2;dx++){int x=tx+dx,y=ty+dy;if(distance(0,0,dx,dy)>2||!land(x,y))continue;f->steps[(size_t)y*n+x]=0;cur.push_back(y*n+x);}
+   for(uint16_t s=1;!cur.empty()&&s<0xfffe;s++){for(int at:cur){int x=at%n,y=at/n;for(int k=0;k<6;k++){int px=x+nx[k],py=y+ny[k];if(!land(px,py))continue;size_t q=(size_t)py*n+px;if(f->steps[q]!=0xffff)continue;f->steps[q]=s;next.push_back((int)q);}}cur.swap(next);next.clear();}}
+  f->used=++fieldClock;uint16_t s=f->steps[(size_t)fy*n+fx];return s==0xffff?-1:std::max(1,(int)s);
+ }
+ // r33: the walking detour of a target from the sector home, cached per (target identity, home) for WalkKeep ticks; at
+ // most one new search per game tick (others stay unknown, 0, until a later call). r33 review: an expired entry keeps
+ // its last path until its refresh wins the search slot (an unreachable farm read as reachable again for up to K*10
+ // ticks every WalkKeep, and a launch could fall into that window); only pairs never searched are unknown.
+ struct Walk {uint32_t uid=0;int hx=0,hy=0,path=0;uint32_t at=0;};std::vector<Walk> walks;uint32_t walkAt=0;static constexpr uint32_t WalkKeep=6000;
+ int detour(const Target&t,int wanted,int hx,int hy,uint32_t now){
+  if(!wanted||hx<=0||hy<=0)return 0;int hex=distance(t.doorX,t.doorY,hx,hy);int stale=0;bool known=false;
+  for(auto&w:walks)if(w.uid==t.uid&&w.hx==hx&&w.hy==hy){if(now-w.at<WalkKeep)return w.path;stale=w.path;known=true;break;}
+  if(walkAt==now+1)return known?stale:0;walkAt=now+1;int path=walk(t.doorX,t.doorY,hx,hy,wanted,detourLimit(hex));if(!path)return known?stale:0;
+  Walk w;w.uid=t.uid;w.hx=hx;w.hy=hy;w.path=path;w.at=now;bool put=false;for(auto&o:walks)if(o.uid==t.uid&&o.hx==hx&&o.hy==hy){o=w;put=true;}
+  if(!put){if(walks.size()>=64)walks.erase(walks.begin());walks.push_back(w);}return path;
+ }
  // Native gardener recruitment, as the specialist menu does (net message
  // 0x13AF -> 0xD5100 on the player's economy): a carrier walks to a shovel
  // (GOOD_SHOVEL 31) and becomes a gardener. Economy of a cell: EcoSectorPool
@@ -403,6 +500,8 @@ public:
   c.carriers=value<uint16_t>(eco+0x26);c.busy=value<uint16_t>(eco+0x22);c.reserve=value<uint16_t>(eco+0x20);
   return c;
  }
+ // r33: free stock of one good in an economy (0xD4280, as census() reads it), -1 without an economy.
+ int stock(uintptr_t eco,int good)const{if(!eco)return -1;int n=((int(__thiscall*)(void*,int))(image+0xd4280))((void*)eco,good);dtmem::invalidate();return n;}
  bool recruit(const Supply&s){
   if(!s.eco)return false;signed char before=value<signed char>(s.eco+0x28c);
   ((void(__thiscall*)(void*,int,int))(image+0xd5100))((void*)s.eco,GardenerType,1);dtmem::invalidate();

@@ -1,8 +1,10 @@
 #pragma once
 #include <windows.h>
+#include <atomic>
 #include "fast-memory.hpp"
 #include "map-size.hpp"
 #include "construction-model.hpp"
+#include "site-panel-model.hpp"
 #include "footprints.hpp"
 #include "construction-signatures.hpp" // Private, generated from the pinned file.
 namespace dtconstruction {
@@ -232,6 +234,70 @@ public:
   if(!removePiles(r,p)||!write<uint32_t>(p+0x14,(bits&~0x1000000u)|0x2000000u))return false;
   complete((void*)p);
   return completed(j);
+ }
+};
+// r34 site selection crash fix. Field crash (pid 8768, r33): a Dark Farm site
+// was clicked in the same input batch that created it. Logic::Update (RVA
+// 0xF2720) -> sub_E9AC0 runs the plugin tick hook (0xE9B18) once, then the
+// event ring: the build net event (CNetInputProcessor, BuildBuilding at
+// 0xF6714) and later click events (0x231100 -> SelectSingleEntity 0xEB3B0 ->
+// 0xEE730 -> role slot 22). The new site still had the native info (inhabitant
+// 53) and no economy: 0x143E07 read 0x8E. No native flag keeps a class-8
+// entity of the player out of SelectOneAtPoint (0xED630), and the post-load
+// role slot 7 (0x1419C0) writes the native info back too, so no tick-side fix
+// can close the window. The CBuildingSiteRole slot-22 entry (RVA 0xC59214 in
+// vtable 0xC591BC, pinned) is replaced once at startup by a wrapper that
+// repeats the panel's own economy lookup (RVA 0x143D43..0x143D7B) and, only
+// when there is no economy and a field the panel reads would need one, calls
+// the original with a transient view (info copy without inhabitant/tool, piles
+// 0) and restores the site's fields right after. Every caller (selection, box
+// selection, the per-tick refresh 0xEDC10, 0xEF030) and every site (any race,
+// kind, owner, paid or not, refused, after a load, plugin disabled) is covered.
+// Completion is untouched: each completed role writes the native info itself.
+// Runs on the game thread inside the native input loop: heap-free, lock-free,
+// no Lua, no log(); the tick logs the counters (SITE_PANEL_GUARD).
+struct PanelGuard {
+ using Panel=void(__thiscall*)(void*,void*,uint32_t);
+ static inline uintptr_t image=0;static inline Panel original=nullptr;static inline bool busy=false;
+ static inline std::atomic<uint32_t> views{0},skips{0},lastSite{0},lastKind{0};
+ alignas(8) static inline uint8_t view[dt::BuildingInfoSize]{};
+ template<class T> static bool get(uintptr_t p,T&v){if(!dtmem::readable(p,sizeof(T)))return false;memcpy(&v,(void*)p,sizeof(T));return true;}
+ // The same reads as RVA 0x143D43..0x143D7B (door [Entity[role+6]+0x48],
+ // stride [0x1054138], tile map [0x11630C4], record 0xEF1A26+20*tile,
+ // AllEcoSectors 0x106C8A4) and the info/pile fields the panel reads.
+ static dt::PanelSite inspect(uintptr_t role,uintptr_t building,uintptr_t&info,uint16_t&type){
+  dt::PanelSite s;uint16_t id=0,tile=0,eco=0;uintptr_t p=0,tiles=0,sector=0;uint32_t door=0,flags=0,stride=0;BYTE owner=0;
+  if(!get(role+6,id)||!id||!get(image+0xe9bc38+4u*id,p)||!p||!get(p+0x48,door)||!get(p+0x14,flags)||!get(building+0xc,type)||!get(building+0x20,owner))return s;
+  if(!get(image+0x1054138,stride)||!get(image+0x11630c4,tiles))return s;
+  int32_t at=((int32_t)door>>16)*(int32_t)stride+(int32_t)(door&0xffff);
+  if(!get(tiles+2*at,tile)||!get(image+0xef1a26+20u*tile,eco)||!get(image+0x106c8a4+4u*eco,sector))return s;
+  if(!get(role+0x178,info)||!get(info+dt::InfoInhabitant,s.inhabitant)||!get(info+dt::InfoTool,s.tool)||!dtmem::readable(info+0x1ec,4)||!get(role+0x1b0,s.piles))return s;
+  (void)flags;(void)owner;s.economy=sector!=0;s.readable=true;s.busy=busy;
+  s.writable=dtmem::readable(info,dt::BuildingInfoSize)&&dtmem::writable(role+0x178,4)&&dtmem::writable(role+0x1b0,6);
+  return s;
+ }
+ static void __fastcall panel(void*role,void*,void*building,uint32_t flag){
+  uintptr_t info=0;uint16_t type=0;dt::PanelSite s=inspect((uintptr_t)role,(uintptr_t)building,info,type);
+  switch(dt::panelCall(s)){
+   case dt::PanelCall::Native:original(role,building,flag);return;
+   case dt::PanelCall::Skip:skips++;lastKind=type;return;
+   case dt::PanelCall::SafeView:break;
+  }
+  views++;lastKind=type;{uint16_t id=0;memcpy(&id,(BYTE*)role+6,2);lastSite=id;}
+  busy=true;dt::panelSafeInfo(view,(const uint8_t*)info);
+  dt::withPanelView((uintptr_t*)((BYTE*)role+0x178),(uint16_t*)((BYTE*)role+0x1b0),(uintptr_t)view,[&]{original(role,building,flag);});
+  busy=false;
+ }
+ // Once at startup, after the pinned signatures passed: the entry must still
+ // be the native panel (RVA 0x143D10, `ret 8`).
+ static bool install(uintptr_t module){
+  uintptr_t*slot=(uintptr_t*)(module+0xc59214);
+  if(*slot==(uintptr_t)&panel)return true;
+  if(*slot!=module+0x143d10)return false;
+  image=module;original=(Panel)(module+0x143d10);
+  DWORD old=0;if(!VirtualProtect(slot,4,PAGE_READWRITE,&old))return false;
+  *slot=(uintptr_t)&panel;VirtualProtect(slot,4,old,&old);
+  return *slot==(uintptr_t)&panel;
  }
 };
 }

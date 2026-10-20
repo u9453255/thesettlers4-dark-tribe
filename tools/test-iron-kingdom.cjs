@@ -5,12 +5,14 @@ const {readMap}=require('./map-format.cjs');
 const {gameDir,python}=require('./project-paths.cjs');
 const {CLEARED_FLAGS}=require('./scenario-terrain.cjs');
 const {farmsInFire,assertNoFarmInFire,assertFarmCleared,checkNative,buildingRows,FarmLock,FARM,BAKED_FLAGS}=require('./citadel-fire.cjs');
-const {GOOD,TOOLSMITH,BARRACKS,TOOL_INPUTS,TOOL_TOTALS,steps,reachable,footprintCells,pileByte7,authoredGround,checkPiles,checkSite,checkLevel,checkLandscape}=require('./scenario-supply.cjs');
+const {GOOD,TOOLSMITH,BARRACKS,TOOL_INPUTS,TOOL_HAMMERS,TOOL_TOTALS,TOOL_GOODS,steps,reachable,footprintCells,pileByte7,authoredGround,checkPiles,checkSite,checkLevel,checkLandscape}=require('./scenario-supply.cjs');
+// r40: the toolsmith also gets one pile of TOOL_HAMMERS hammers (a lost smith can be replaced).
+const TOOL_PILES=[...TOOL_INPUTS,GOOD.HAMMER];
 const root=path.resolve(__dirname,'..'),N=576;
 const DARK_START=[378,134],VIKING_START=[475,353];
 // Start supplies of the Viking kingdom (build-iron-kingdom.cjs): weapon and shovel piles at the start.
 const SUPPLY=[GOOD.SWORD,GOOD.SWORD,GOOD.BOW,GOOD.BATTLEAXE,GOOD.SHOVEL,GOOD.SHOVEL];
-// Toolsmith start buffer (r29): IRONBAR x16 and COAL x16 in piles of 8 beside the source toolsmith's entrance.
+// Toolsmith start buffer (r29): IRONBAR x16 and COAL x16 in piles of 8 beside the source toolsmith's entrance; r40: HAMMER x2.
 const map=readMap(path.join(root,'work/generated/Map/User/DarkTribe_IronKingdom.map'));
 const source=readMap(path.join(gameDir(),'Map/Campaign/AO_trojan10.map'));
 const firstDawn=readMap(path.join(root,'work/generated/Map/User/DarkTribe_FirstDawn.map'));
@@ -110,7 +112,7 @@ for(const u of units) {
 }
 // Goods: the Trojan starting goods are removed, the Viking goods kept as the unchanged prefix.
 const goods=rows(map,9,8),sourceVikingGoods=rows(source,9,8).filter(g=>get(source,6)[4*(g.readUInt16LE(2)*N+g.readUInt16LE(0))+1]===2);
-assert(goods.length===16+SUPPLY.length+TOOL_INPUTS.length&&goods.every(g=>objects[4*(g.readUInt16LE(2)*N+g.readUInt16LE(0))+1]===2),'Viking goods only');
+assert(goods.length===16+SUPPLY.length+TOOL_PILES.length&&goods.every(g=>objects[4*(g.readUInt16LE(2)*N+g.readUInt16LE(0))+1]===2),'Viking goods only');
 assert(sourceVikingGoods.length===16&&goods.slice(0,16).every((g,i)=>g.equals(sourceVikingGoods[i])),'Source Viking goods kept as the prefix');
 
 // Start supplies for new armies: one Viking barracks appended after the source buildings, on clear owned
@@ -125,7 +127,7 @@ function verifySupply(m) {
     others:Buffer.concat(all.slice(0,sourceBuildingCount)),maskOf,units:get(m,7),goods:get(m,9),start:VIKING_START});
   site.ground=checkLevel({N,land:get(m,13),sourceLand:get(source,13),record:added[0],level:barracksLevel,maxStep:ground.step});
   const piles=checkPiles({N,land:get(m,13),objects:get(m,6),goods:get(m,9),from:16,byte7:pileByte7(get(source,9)),buildings:get(m,8),maskOf,
-    units:get(m,7),starts:{2:VIKING_START},expected:{2:[...SUPPLY,...TOOL_INPUTS]},totals:{2:TOOL_TOTALS}})[2];
+    units:get(m,7),starts:{2:VIKING_START},expected:{2:[...SUPPLY,...TOOL_PILES]},totals:{2:{...TOOL_TOTALS,[GOOD.HAMMER]:TOOL_HAMMERS}}})[2];
   // The kingdom's one toolsmith is the source record (unchanged above), its entrance owned and reachable; the iron bar
   // and coal piles lie within 16 steps of that entrance.
   const smiths=all.filter(b=>b[5]===2&&b[4]===TOOLSMITH);assert(smiths.length===1,'One Viking toolsmith');
@@ -133,7 +135,8 @@ function verifySupply(m) {
   toolsmith.entrance=[toolsmith.x+dx,toolsmith.y+dy];
   const door=toolsmith.entrance[1]*N+toolsmith.entrance[0];
   assert(get(m,6)[4*door+1]===2&&reachable(N,get(m,13),get(m,6),2,VIKING_START)[door],'Toolsmith entrance not owned or unreachable');
-  for(const p of piles)if(TOOL_INPUTS.includes(p.good))assert(steps(...toolsmith.entrance,p.x,p.y)<=16,'Toolsmith input away from its entrance');
+  for(const p of piles)if(TOOL_GOODS.has(p.good))assert(steps(...toolsmith.entrance,p.x,p.y)<=16,'Toolsmith input away from its entrance');
+  assert(piles.filter(p=>p.good===GOOD.HAMMER).length===1,'One hammer pile'); /* r40 */
   return {barracks:site,toolsmith,piles};
 }
 const supply=verifySupply(map);

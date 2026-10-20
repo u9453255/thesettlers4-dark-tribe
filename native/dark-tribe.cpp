@@ -108,6 +108,33 @@ using AddMana=uint32_t(__fastcall*)(int,int);static AddMana originalIncome=nullp
 // This entry is AI catch-up mana, not mushroom production. The human Dark
 // economy must not mint catch-up resources when its mana bank is empty.
 static uint32_t __fastcall income(int player,int amount){if(running.load()&&!incomeBypass&&player==1&&amount>0)return peek<uint32_t>(image+0x109b7fc+0x8c);return originalIncome(player,amount);}
+// r41 (user: a landed Manacopter healed to full almost instantly, enemies could not kill it): CManakopter's update
+// (RVA 0x16B4E0) reschedules a landed aircraft every 10 ticks (0x16B55E) and, when the cell's flag byte has the Dark
+// bit 0x04, stores DTManakopterHitpoints (BYTE at RVA 0xDCDB24, 250) into its hit points +0x21 (0x16B58F..0x16B597):
+// full health every 10 ticks on Dark land. The user wants no healing at all, so the store (88 47 21 at 0x16B594) is
+// replaced by three NOPs at startup; the constructor (0x16AF74) and the damage path (0x16B490) still write +0x21.
+// The sequence is pinned (the je over it, the load with the relocated setting address, the store, the jmp after it);
+// a page already patched (NOPs in place) passes too.
+static bool installNoHealing(){BYTE expected[19]={0x0f,0x84,0x8b,0x01,0x00,0x00,0xa0,0,0,0,0,0x88,0x47,0x21,0xe9,0x7e,0x01,0x00,0x00};uint32_t setting=(uint32_t)(image+0xdcdb24);memcpy(expected+7,&setting,4);
+ BYTE*at=(BYTE*)(image+0x16b589);bool patched=at[11]==0x90&&at[12]==0x90&&at[13]==0x90;if(memcmp(at,expected,11)||memcmp(at+14,expected+14,5)||(!patched&&memcmp(at+11,expected+11,3)))return false;if(patched)return true;
+ DWORD old=0;if(!VirtualProtect(at+11,3,PAGE_EXECUTE_READWRITE,&old))return false;at[11]=0x90;at[12]=0x90;at[13]=0x90;VirtualProtect(at+11,3,old,&old);FlushInstructionCache(GetCurrentProcess(),at+11,3);return true;}
+// r43 (user: Iron Kingdom's computer drafted every carrier into soldiers until nobody transported or built; the
+// reserve must scale with the kingdom). The AI's CPeopleManagerTask (0x2566D0) sets its home economy's carrier
+// reserve every pass through CEcoManager slot +0x138 (0x51C10: word eco+0x20 = clamp(value, 5, 999)) as
+// clamp(min(7*pendingTasks + 10, carriers - 10), 5, 80), and the barracks (0x134D5A) drafts a carrier only while
+// carriers > busy + reserve; the cap carriers - 10 follows every draft down to 5 (field: reserve 8 -> 6 -> 5).
+// The one call site (0x2567B8, call [eax+0x138]) is redirected to reserveHook, which raises the value to
+// dtoffence::carrierKeep(completed buildings of the player; table 0x10EF624 + (p*0x53 + type)*8, incremented by
+// 0x1362F0 on completion) and calls the native setter. It runs inside CAIMain::Tick on the game thread: heap-free,
+// log-free, no plugin state but the per-player values the tick logs as CARRIER_RESERVE.
+struct ReserveSeen{int native,keep,set,buildings;};static ReserveSeen reserveSeen[9]={},reserveLogged[9]={};
+static int kingdomBuildings(int p){if(p<1||p>8)return 0;int n=0;const int32_t*row=(const int32_t*)(image+0x10ef624+(uintptr_t)p*0x298);for(int t=0;t<83;t++){int c=row[t*2];if(c>0&&c<10000)n+=c;}return n;}
+static int __fastcall reserveHook(BYTE*eco,void*,int value){using SetReserve=int(__thiscall*)(BYTE*,int);int set=value;int p=eco?*(const int32_t*)(eco+8):0;
+ if(running.load()&&p>=1&&p<=8){int b=kingdomBuildings(p);set=dtoffence::carrierReserve(value,b);reserveSeen[p]=ReserveSeen{value,dtoffence::carrierKeep(b),set,b};}
+ return ((SetReserve)(image+0x51c10))(eco,set);}
+static bool installReserveHook(){BYTE expected[22]={0x8b,0x43,0x28,0x57,0x8b,0x40,0x24,0x8b,0x48,0x18,0x8b,0x01,0xff,0x90,0x38,0x01,0x00,0x00,0x5f,0x5e,0x5b,0xc3};BYTE setter[11]={0x55,0x8b,0xec,0x8b,0x41,0x04,0x56,0x57,0x8b,0x7d,0x08};BYTE*at=(BYTE*)(image+0x2567ac);
+ bool patched=at[12]==0xe8&&at[17]==0x90;if(memcmp(at,expected,12)||memcmp(at+18,expected+18,4)||(!patched&&memcmp(at+12,expected+12,6))||memcmp((void*)(image+0x51c10),setter,sizeof(setter)))return false;if(patched)return true;
+ DWORD old=0;if(!VirtualProtect(at+12,6,PAGE_EXECUTE_READWRITE,&old))return false;int32_t rel=(int32_t)((uintptr_t)&reserveHook-(uintptr_t)(at+17));at[12]=0xe8;memcpy(at+13,&rel,4);at[17]=0x90;VirtualProtect(at+12,6,old,&old);FlushInstructionCache(GetCurrentProcess(),at+12,6);return true;}
 static bool installIncomeHook(){BYTE expected[9]={0x8d,0x41,0xff,0x3b,0x05,0,0,0,0};uint32_t compare=(uint32_t)(image+0xe94828);memcpy(expected+5,&compare,4);BYTE*at=(BYTE*)(image+0x36380);if(memcmp(at,expected,9))return false;BYTE*gateway=(BYTE*)VirtualAlloc(nullptr,32,MEM_COMMIT|MEM_RESERVE,PAGE_EXECUTE_READWRITE);if(!gateway)return false;memcpy(gateway,at,9);gateway[9]=0xe9;*(int32_t*)(gateway+10)=(int32_t)((uintptr_t)(at+9)-(uintptr_t)(gateway+14));originalIncome=(AddMana)gateway;DWORD old;if(!VirtualProtect(at,9,PAGE_EXECUTE_READWRITE,&old))return false;at[0]=0xe9;*(int32_t*)(at+1)=(int32_t)((uintptr_t)income-(uintptr_t)(at+5));memset(at+5,0x90,4);VirtualProtect(at,9,old,&old);FlushInstructionCache(GetCurrentProcess(),at,9);return true;}
 // Keep the pinned direct native farm-income path intact. No trampoline or interception.
 static bool nativeFarmIncomeIntact(){BYTE expected[]={0x55,0x8b,0xec,0x8b,0x4d,0x08};return !memcmp((void*)(image+0x389c0),expected,sizeof(expected));}
@@ -217,6 +244,8 @@ static bool fireSweep(std::vector<uint16_t>&farms,dt::FireBlockade&fire,bool loa
  return removed;
 }
 static void construction(uint32_t t){
+ // r34: the site panel wrapper (dtconstruction::PanelGuard) runs inside the native input loop and only counts; it is logged here.
+ {static uint32_t seenViews=0,seenSkips=0;uint32_t v=dtconstruction::PanelGuard::views.load(),k=dtconstruction::PanelGuard::skips.load();if(v!=seenViews||k!=seenSkips){seenViews=v;seenSkips=k;char msg[200];snprintf(msg,sizeof(msg),"SITE_PANEL_GUARD views=%lu skips=%lu site=%lu kind=%lu panel of a site without an economy shown with a transient safe view",(unsigned long)v,(unsigned long)k,(unsigned long)dtconstruction::PanelGuard::lastSite.load(),(unsigned long)dtconstruction::PanelGuard::lastKind.load());log(msg);}}
  ConstructionOps ops;dt::BuildingLimit limit;dt::countJobs(limit,state);uint16_t fresh[64];unsigned freshCount=0;
  dt::FireBlockade fire;std::vector<uint16_t> farms;bool start=fireStartPending,load=fireLoadPending&&!start;fireStartPending=false;fireLoadPending=false;ops.start=start;
  for(uint32_t id=1;id<65536;id++){
@@ -325,6 +354,26 @@ static void boardingOrders(uint32_t t){
   if(remove)boarding.erase(boarding.begin()+i);else i++;
  }
 }
+// r39 (user: Dark Gardeners dropped from a Manacopter were "invincible" and oddly selectable): the native unload
+// (RVA 0x16B990) pops each passenger and posts it two entity events, 0x19 (leave at the exit tile) and 0x11/0xD (back
+// to work), handled by the role's event slot (CSettler slot 27 0x1818D0 -> role +0x38). The soldier roles
+// (CHJBRole 0x189F70, case 0x18A020; Shamans forward to it) and the computer Gardener (CGardenerRole 0x179D1A) handle
+// 0x19 by placing the unit at the nearest free cell of a land sector around the exit tile (0x182A40: ground map and
+// position +0x18, the type's animation), re-indexing it (0x1BB560) and clearing the hidden flag (+0x14 &= ~0x8000,
+// |= 0x2100). The Dark Gardener role (CDarkGardenerRole, vtable 0xC5AD04, slot 14 0x174F10) knows only 0xD and 0x11
+// and treats 0x19 as "put me back on the scheduler": the unit kept the hidden flag, had no ground cell (clicks on
+// its cell found nothing) and no spatial index entry (no enemy and no computer defence could target it), while its
+// 0x11 event still gave it work. The mod does the 0x19 part for Dark Gardeners right after the native unload.
+static void placeUnloaded(uint16_t craft,const std::vector<std::pair<uint32_t,uint16_t>>&riders,int ax,int ay,int ex,int ey){
+ using Place=BYTE(__stdcall*)(uint32_t,int,int);using Index=void(__thiscall*)(BYTE*);int placed=0,left=0;
+ for(auto&r:riders){BYTE*u=entity(r.second);if(!u||peek<uint32_t>((uintptr_t)u+4)!=r.first||u[10]!=1)continue;
+  uintptr_t role=peek<uintptr_t>((uintptr_t)u+0x58);if(!role||peek<uintptr_t>(role)!=image+0xc5ad04)continue; /* Dark Gardener role only */
+  if(!(peek<uint32_t>((uintptr_t)u+0x14)&0x8000))continue;
+  operation="Manakopter gardener placement";BYTE ok=((Place)(image+0x182a40))(r.second,ex,ey);if(!ok)ok=((Place)(image+0x182a40))(r.second,ax,ay);
+  if(ok){((Index)(image+0x1bb560))(u);uint32_t bits=peek<uint32_t>((uintptr_t)u+0x14);*(uint32_t*)(u+0x14)=(bits&~0x8000u)|0x2100u;placed++;}else left++;
+  operation="idle";dtmem::invalidate();}
+ if(placed||left){char line[150];snprintf(line,sizeof(line),"PASSENGER_PLACED craft=%u gardeners=%d unplaced=%d exit=%d,%d",craft,placed,left,ex,ey);log(line);}
+}
 static void transport(const Command&c){
  if(!aircraft(c.entity)||identity(c.entity)!=c.identity||!landed(c.entity)||!passengerStorage(c.entity)){say("The Manacopter must be landed to unload.");return;}
  cancelBoarding(c.entity);
@@ -339,7 +388,11 @@ static void transport(const Command&c){
   for(uintptr_t r=a;scheduler&&r+12<=b&&readable((void*)r,12);r+=12){uint32_t uid=peek<uint32_t>(r),id=peek<uint32_t>(r+4);BYTE*u=id&&id<65536?entity((uint16_t)id):nullptr;
    if(!u||peek<uint32_t>((uintptr_t)u+4)!=uid||u[0x42]==0xa)continue;uint32_t bucket=peek<uint32_t>((uintptr_t)u+0x30);if(bucket>0x1f)continue;
    u[0x42]=0xa;((Remove)(image+0x16d720))(scheduler,bucket,id);dtmem::invalidate();char line[100];snprintf(line,sizeof(line),"PASSENGER_NORMALISED craft=%u unit=%u",c.entity,id);log(line);}}
+ /* r39: the passengers and the exit record before the native unload empties the vector */
+ std::vector<std::pair<uint32_t,uint16_t>> riders;{uintptr_t a=peek<uintptr_t>((uintptr_t)p+0x58),b=peek<uintptr_t>((uintptr_t)p+0x5c);for(uintptr_t r=a;r+12<=b&&readable((void*)r,12);r+=12){uint32_t uid=peek<uint32_t>(r),id=peek<uint32_t>(r+4);if(id&&id<65536)riders.push_back({uid,(uint16_t)id});}}
+ int ex=x,ey=y;{int k=dt::unloadExit(p[0x4e]);if(k>=0){ex=x+(signed char)peek<BYTE>(image+0xd69988+4*k);ey=y+(signed char)peek<BYTE>(image+0xd69989+4*k);}}
  using Unload=void(__thiscall*)(BYTE*);operation="Manakopter unload";((Unload)(image+0x16b990))(p);operation="idle";dtmem::invalidate();
+ placeUnloaded(c.entity,riders,x,y,ex,ey);
  say(passengers(c.entity)?"Some passengers could not get out.":"");
  char line[120];snprintf(line,sizeof(line),"TRANSPORT id=%u identity=%u action=16 passengers=%u",c.entity,c.identity,passengers(c.entity));log(line);
 }
@@ -629,20 +682,31 @@ static dtoffence::Native nativeOffence;static dtoffence::Campaign campaigns[9][8
 static const char*offenceReason[9][8];static uint32_t offenceDeclines[9][8];static bool offenceReleased=false;static uint32_t offenceRecruitAt[9],offenceOrderAt[9],offenceRecruitNote[9];static int offenceOrderAlive[9];static const char*offenceRazeNote="";static bool offenceNoEconomy[9];static const char*offenceRecruitWhy[9];static const char*offenceToolsWhy[9];static uint32_t offenceToolsNote[9];
 // r29 review: the plugin's part of each computer's shovel order, watched every tick (transient, never in dt::State).
 static dtoffence::ShovelWatch offenceShovelWatch[9];static uintptr_t offenceShovelEco[9];static uint32_t offenceShovelRestores[9],offenceShovelRestoreNote[9];
+// r33: the home economy's iron-bar stock at the last 250-tick evaluation (-1 unknown): no shovel restore while it is 0.
+static int offenceIron[9]={-1,-1,-1,-1,-1,-1,-1,-1,-1};static uint32_t offenceIronNote[9];
 // An open call for allies: an assault on a Dark building that the other computer enemies join (transient).
 struct OffenceCall {dtoffence::Target target{};uint32_t until=0;uint8_t caller=0;};static OffenceCall offenceCall;
 // r30: the citadel fire as last logged (OFFENCE_FIRE_STATE on change) and the last native-soldier census note per player (transient).
 static char offenceFireNote[320];static uint32_t offenceFireNativeAt[9];
-static void offenceReset(){offenceAdopted=false;offenceReleased=false;for(auto&row:campaigns)for(auto&c:row)c=dtoffence::Campaign{};memset(offenceReason,0,sizeof(offenceReason));memset(offenceDeclines,0,sizeof(offenceDeclines));memset(offenceRecruitAt,0,sizeof(offenceRecruitAt));memset(offenceNoEconomy,0,sizeof(offenceNoEconomy));memset(offenceOrderAt,0,sizeof(offenceOrderAt));memset(offenceOrderAlive,0,sizeof(offenceOrderAlive));memset(offenceRecruitNote,0,sizeof(offenceRecruitNote));memset(offenceRecruitWhy,0,sizeof(offenceRecruitWhy));memset(offenceToolsWhy,0,sizeof(offenceToolsWhy));memset(offenceToolsNote,0,sizeof(offenceToolsNote));for(auto&w:offenceShovelWatch)w=dtoffence::ShovelWatch{};memset(offenceShovelEco,0,sizeof(offenceShovelEco));memset(offenceShovelRestores,0,sizeof(offenceShovelRestores));memset(offenceShovelRestoreNote,0,sizeof(offenceShovelRestoreNote));offenceCall=OffenceCall{};offenceRazeNote="";nativeOffence.resetTerritory();offenceFireNote[0]=0;memset(offenceFireNativeAt,0,sizeof(offenceFireNativeAt));}
-static const char*offenceEvent(dtoffence::Event e){static const char*names[]={"DECLINE","LAUNCH","STAGE","ASSAULT","SIEGE","DESTROY","DEFER","RETARGET","RETURN","DISSOLVE","LOST","ADOPT","ORDER_IGNORED","AVOID","COLLAPSE","GREENING","GARDENERS","RECLAIM","FRONT","HUNT","JOIN","CALL","FIRE","CONVOY"};return names[(int)e];}
+// r36: last logged route per campaign (offenceRouteNote), transient.
+struct RouteSeen {int phase=-1,legX=-1,legY=-1,vias=-1,endX=-1,endY=-1,vx[dtoffence::MaxVias]={},vy[dtoffence::MaxVias]={};uint32_t replanAt=0,same=0;bool homeless=false;};
+static RouteSeen offenceRoutes[9][8];
+static void offenceReset(){offenceAdopted=false;offenceReleased=false;for(auto&row:campaigns)for(auto&c:row)c=dtoffence::Campaign{};for(auto&row:offenceRoutes)for(auto&r:row)r=RouteSeen{};memset(offenceReason,0,sizeof(offenceReason));memset(offenceDeclines,0,sizeof(offenceDeclines));memset(offenceRecruitAt,0,sizeof(offenceRecruitAt));memset(offenceNoEconomy,0,sizeof(offenceNoEconomy));memset(offenceOrderAt,0,sizeof(offenceOrderAt));memset(offenceOrderAlive,0,sizeof(offenceOrderAlive));memset(offenceRecruitNote,0,sizeof(offenceRecruitNote));memset(offenceRecruitWhy,0,sizeof(offenceRecruitWhy));memset(offenceToolsWhy,0,sizeof(offenceToolsWhy));memset(offenceToolsNote,0,sizeof(offenceToolsNote));for(auto&w:offenceShovelWatch)w=dtoffence::ShovelWatch{};memset(offenceShovelEco,0,sizeof(offenceShovelEco));memset(offenceShovelRestores,0,sizeof(offenceShovelRestores));memset(offenceShovelRestoreNote,0,sizeof(offenceShovelRestoreNote));for(auto&v:offenceIron)v=-1;memset(offenceIronNote,0,sizeof(offenceIronNote));offenceCall=OffenceCall{};offenceRazeNote="";nativeOffence.resetTerritory();offenceFireNote[0]=0;memset(offenceFireNativeAt,0,sizeof(offenceFireNativeAt));}
+static const char*offenceEvent(dtoffence::Event e){static const char*names[]={"DECLINE","LAUNCH","STAGE","ASSAULT","SIEGE","DESTROY","DEFER","RETARGET","RETURN","DISSOLVE","LOST","ADOPT","ORDER_IGNORED","AVOID","COLLAPSE","GREENING","GARDENERS","RECLAIM","FRONT","HUNT","JOIN","CALL","FIRE","CONVOY","DEFEND"};return names[(int)e];}
 // Gardeners held by any campaign of the player (a gardener serves one army at a time).
 static bool offenceHeld(uint8_t p,uint16_t id){for(auto&c:campaigns[p])for(int i=0;i<c.gardeners;i++)if(c.gid[i]==id)return true;return false;}
+// r36 diagnostics (fire guard and routes, log only): Euclidean clearance of a segment from the live fire centres (-1: no
+// fire), and the cells of the straight hex line a->b off the land region (rocks, water) or with a building/blocked flag.
+static double offenceSegFire(const dtoffence::Fire&f,int ax,int ay,int bx,int by){if(!f.on||f.z.empty())return -1;double b=1e18;for(auto&z:f.z)b=std::min(b,dtoffence::seg2(ax,ay,bx,by,z.x,z.y));return sqrt(b);}
+static double offenceFireAt(const dtoffence::Fire&f,int x,int y){int d=dtoffence::clear2(x,y,f);return d>=dtoffence::NoFire?-1.0:sqrt((double)d);}
+static void offenceLegLand(int ax,int ay,int bx,int by,int wanted,int&off,int&built){off=built=0;int steps=dtoffence::distance(ax,ay,bx,by);if(steps>2000)return;
+ for(int k=0;k<=steps;k++){int x=steps?ax+(int)lround((double)(bx-ax)*k/steps):ax,y=steps?ay+(int)lround((double)(by-ay)*k/steps):ay;if(nativeOffence.region(x,y)!=wanted)off++;else if(nativeOffence.flags(x,y)&0x09)built++;}}
 struct OffenceOps {
- int region=0;
+ int region=0,homeX=0,homeY=0;uint32_t now=0; /* r33: the sector home and the tick, for the targets' walking detour */
  bool sector(const dtoffence::Campaign&c){return nativeOffence.sector(c.player,c.sector)!=0;}
  dtoffence::Config config(uint8_t p){return nativeOffence.config(p);}
  dtoffence::Strength strength(const dtoffence::Campaign&c){return nativeOffence.strength(c.player,c.sector);}
- void targets(const dtoffence::Campaign&,std::vector<dtoffence::Target>&out){nativeOffence.targets(region,out);}
+ void targets(const dtoffence::Campaign&,std::vector<dtoffence::Target>&out){nativeOffence.targets(region,out,homeX,homeY,now);}
  bool alive(const dtoffence::Target&t){return nativeOffence.alive(t);}
  int defenders(int x,int y,int radius,bool weighted){return nativeOffence.defenders(x,y,radius,weighted);}
  void available(const dtoffence::Campaign&c,int x,int y,std::vector<dtoffence::Soldier>&out){nativeOffence.available(c.player,c.sector,x,y,out);}
@@ -650,12 +714,15 @@ struct OffenceOps {
   if(n<=0){char msg[160];snprintf(msg,sizeof(msg),"OFFENCE_RAISE_FAILED player=%u sector=%u wanted=%u reason=%s",c.player,c.sector,(unsigned)chosen.size(),nativeOffence.reason);log(msg);}return n;}
  bool members(const dtoffence::Campaign&c,std::vector<dtoffence::Soldier>&out){return nativeOffence.members(c.player,c.sector,c.squad,out);}
  // The native group order (event 0x1396 -> CGroupMgr 0x16A800) has no owner
- // test. FORWARD also on the way home: WATCH would leave the soldiers passive
- // there (and park gardeners for good). Destinations never have flag 0x01, so
- // no soldier is garrisoned. At most 100 units per order (formation table, 0x16A109).
- void order(const dtoffence::Campaign&c,std::vector<WORD>&ids,int x,int y,const char*what){
+ // test. Soldiers always FORWARD, also on the way home: WATCH would leave them
+ // passive there. r33: escorted gardeners WATCH (park): the order copies the mode
+ // into the event unchanged (0x16A9E3) and the gardener's handler pushes job 0xB0
+ // (walk, then wait) without touching its work centre (0x179B90..0x179B99), so it
+ // never greens its way off; every release is a FORWARD order. Destinations never
+ // have flag 0x01, so no soldier is garrisoned. At most 100 units per order (formation table, 0x16A109).
+ void order(const dtoffence::Campaign&c,std::vector<WORD>&ids,int x,int y,const char*what,S4_MOVEMENT_ENUM mode=S4_MOVEMENT_FORWARD){
   int n=side();if(!n||x<2||y<2||x>=n-2||y>=n-2||ids.empty())return;
-  for(size_t at=0;at<ids.size();at+=100){SIZE_T count=std::min<size_t>(100,ids.size()-at);internalSend=true;BOOL ok=api->SendWarriors(x,y,S4_MOVEMENT_FORWARD,ids.data()+at,count,1);internalSend=false;dtmem::invalidate();
+  for(size_t at=0;at<ids.size();at+=100){SIZE_T count=std::min<size_t>(100,ids.size()-at);internalSend=true;BOOL ok=api->SendWarriors(x,y,mode,ids.data()+at,count,1);internalSend=false;dtmem::invalidate();
    if(!ok){char msg[140];snprintf(msg,sizeof(msg),"OFFENCE_ORDER_REFUSED player=%u sector=%u units=%u at=%d,%d what=%s",c.player,c.sector,(unsigned)count,x,y,what);log(msg);}}
  }
  void move(const dtoffence::Campaign&c,const std::vector<dtoffence::Soldier>&m,int x,int y,bool home){std::vector<WORD> ids;for(auto&s:m)if(nativeOffence.movable(s.id,s.uid))ids.push_back(s.id);order(c,ids,x,y,home?"army home":"army");}
@@ -672,7 +739,10 @@ struct OffenceOps {
  bool gardener(const dtoffence::Campaign&c,uint16_t id,uint32_t uid,dtoffence::Gardener&g){return nativeOffence.gardener(c.player,id,uid,g);}
  // One gardener per order: its destination becomes its work centre.
  void sendGardener(const dtoffence::Campaign&c,const dtoffence::Gardener&g,int x,int y){std::vector<WORD> ids;if(nativeOffence.movable(g.id,g.uid))ids.push_back(g.id);order(c,ids,x,y,"gardener");}
- void moveGardeners(const dtoffence::Campaign&c,const std::vector<dtoffence::Gardener>&gs,int x,int y){std::vector<WORD> ids;for(auto&g:gs)if(nativeOffence.movable(g.id,g.uid))ids.push_back(g.id);order(c,ids,x,y,"gardeners");}
+ // r33: one gardener per order, WATCH: it walks there and waits (job 0xB0), its work centre unchanged.
+ void park(const dtoffence::Campaign&c,const dtoffence::Gardener&g,int x,int y){std::vector<WORD> ids;if(nativeOffence.movable(g.id,g.uid))ids.push_back(g.id);order(c,ids,x,y,"gardener parked",S4_MOVEMENT_WATCH);}
+ // r33: Dark Gardeners and fighters in or near the player's territory, its owned Dark cells and their rise.
+ void intrusion(const dtoffence::Campaign&c,dtoffence::Intrusion&in){nativeOffence.intrusion(c.player,region,in);}
  void ring(const dtoffence::Target&t,std::vector<dtoffence::RingCell>&out){nativeOffence.ring(t,out);}
  bool beside(const dtoffence::Target&t,const dtoffence::RingCell&r,int&x,int&y){return nativeOffence.beside(t,r,x,y);}
  // Soldiers standing on a Dark ring cell keep it Dark (the gardener's cell test skips occupied cells): move them out (at most 12 per pass), never into the citadel fire (r30).
@@ -685,6 +755,19 @@ struct OffenceOps {
  bool ownDark(const dtoffence::Campaign&c,int x,int y,int radius,const std::vector<dtoffence::Keep>&keep,int&dx,int&dy){return nativeOffence.ownDark(c.player,x,y,radius,keep,region,dx,dy);}
  void darkFighters(const dtoffence::Campaign&,std::vector<std::pair<int,int>>&out){nativeOffence.fighters(out);}
  bool reach(const dtoffence::Campaign&,int x,int y){return nativeOffence.reach(x,y,region);}
+ // r38: walking steps between two points of the land region (bridge field per goal, cached), -1 none, 0 unknown.
+ int walkSteps(const dtoffence::Campaign&,int fx,int fy,int tx,int ty){operation="offence walk field";int s=nativeOffence.walkSteps(fx,fy,tx,ty,region);operation="idle";return s;}
+ // r38 diagnostics: why no building can be attacked (every target with its reachability, walked path, detour and lock).
+ void listTargets(const dtoffence::Campaign&c,const std::vector<dtoffence::Target>&all,const dtoffence::Fire&f,uint32_t t){
+  std::string line;char head[120];snprintf(head,sizeof(head),"OFFENCE_TARGETS player=%u sector=%u fire=%d buildings=%u",c.player,c.sector,f.on?1:0,(unsigned)all.size());line=head;int shown=0;
+  for(auto&b:all){if(shown++>=12)break;char u[160];snprintf(u,sizeof(u)," [kind=%u id=%u door=%d,%d reach=%d path=%d detour=%d locked=%d avoided=%d region=%d]",b.kind,b.id,b.doorX,b.doorY,b.reachable?1:0,b.path,b.detour,dtoffence::locked(b,f)?1:0,dtoffence::avoided(c,b.uid,t)?1:0,nativeOffence.region(b.doorX,b.doorY));line+=u;}
+  if(all.size()>12){char more[32];snprintf(more,sizeof(more)," +%u more",(unsigned)(all.size()-12));line+=more;}
+  char tail[64];snprintf(tail,sizeof(tail)," homeRegion=%d",region);line+=tail;log(line.c_str());
+ }
+ // r37: every target's walking path from (x,y) (one breadth-first search, limit = the longest detourLimit among them, at
+ // most twice the map side); a target without a walk from here within the limit is not reachable for this choice.
+ void paths(const dtoffence::Campaign&,int x,int y,std::vector<dtoffence::Target>&all){int limit=0;for(auto&t:all)if(t.reachable)limit=std::max(limit,dtoffence::detourLimit(dtoffence::distance(x,y,t.doorX,t.doorY)));
+  int n=side();limit=std::min(limit,2*std::max(1,n));operation="offence path search";nativeOffence.walkAll(x,y,region,limit,all);operation="idle";for(auto&t:all)if(t.path<0)t.reachable=false;}
  // One campaign per parked citadel: the first (player, sector) of those besieging it works its ring.
  bool leads(const dtoffence::Campaign&c,const dtoffence::Target&t){for(uint8_t p=2;p<=8;p++)for(int i=0;i<8;i++){auto&o=campaigns[p][i];if(&o==&c||o.phase!=dtoffence::Phase::Assault||o.target.id!=t.id||o.target.uid!=t.uid)continue;if(p*8+i<c.player*8+c.sector)return false;}return true;}
  bool call(const dtoffence::Campaign&c,uint32_t t,dtoffence::Target&out){if(!offenceCall.until||t>=offenceCall.until||offenceCall.caller==c.player)return false;out=offenceCall.target;return true;}
@@ -703,10 +786,37 @@ struct OffenceOps {
   /* r30: units=soldiers or gardeners ordered out, benched=gardeners dropped and sent home, to=the cell ordered (exit point). */
   if(e==dtoffence::Event::Fire){char note[300];snprintf(note,sizeof(note),"OFFENCE_FIRE player=%u sector=%u phase=%d style=%s target=%u kind=%u door=%d,%d units=%d benched=%d to=%d,%d reason=%s",c.player,c.sector,(int)c.phase,dtoffence::styleName(c.style),c.target.id,c.target.kind,c.target.doorX,c.target.doorY,c.value,c.versus,c.goalX,c.goalY,c.reason?c.reason:"");log(note);return;}
   /* r32: the convoy (rate-limited in the model): gap=farthest held gardener from the army centre (rally: distance to the gardeners' centre), limit=the gap above which the army holds (rally: RallyGap), left=gardeners left behind, wait=ticks the army held, at=army centre (rally: rally cell). */
+  /* r33: the defence: start, recall, end (phase 3) or a declined one; units=Dark units in or near the territory near the area,
+     fighters among them, own=owned Dark cells, rise=their growth in the last territory pass, area=the defended point. */
+  if(e==dtoffence::Event::Defend){char note[320];snprintf(note,sizeof(note),"OFFENCE_DEFEND player=%u sector=%u phase=%d army=%u gardeners=%d units=%d fighters=%d own=%d rise=%d area=%d,%d reason=%s",c.player,c.sector,(int)c.phase,(unsigned)c.initial,c.gardeners,c.threatUnits,c.threatFighters,c.threatOwn,c.threatRise,c.frontX,c.frontY,c.reason?c.reason:"");log(note);return;}
   if(e==dtoffence::Event::Convoy){char note[300];snprintf(note,sizeof(note),"OFFENCE_CONVOY player=%u sector=%u phase=%d style=%s target=%u kind=%u door=%d,%d army=%u gardeners=%d gap=%d limit=%d left=%d wait=%u at=%d,%d reason=%s",c.player,c.sector,(int)c.phase,dtoffence::styleName(c.style),c.target.id,c.target.kind,c.target.doorX,c.target.doorY,(unsigned)c.initial,c.gardeners,c.gap,c.versus,c.value,c.waited,c.goalX,c.goalY,c.reason?c.reason:"");log(note);return;}
   /* r32: gap=farthest held gardener from the army centre at the last convoy look, wait=ticks the army has held for its gardeners. */
   char msg[400];snprintf(msg,sizeof(msg),"OFFENCE_%s player=%u sector=%u phase=%d style=%s raid=%u target=%u kind=%u door=%d,%d army=%u gardeners=%d ring=%u/%d value=%d versus=%d chance=%u gap=%d wait=%u reason=%s",
    offenceEvent(e),c.player,c.sector,(int)c.phase,dtoffence::styleName(c.style),(unsigned)c.raid,c.target.id,c.target.kind,c.target.doorX,c.target.doorY,(unsigned)c.initial,c.gardeners,c.progress,c.ringSize,c.value,c.versus,c.chance,c.gap,c.waited,c.reason?c.reason:"");log(msg);
+ }
+ /* r36 diagnostics: every unit the fire guard turned back, with the leg the campaign had ordered. leg=via k/n (k = index of
+    the waypoint being walked to, n = waypoints; k=n: the last leg), from=leg start, to=the army's order cell, prev=start of
+    the previous leg, legFire=clearance of the leg segment from the fire (Euclid tiles), legOff/legBuilt=cells of the straight
+    leg off the land region (rocks, water) / with a building or blocked flag, age=ticks since the order, body/bodyFire=army
+    body, exit=cell the soldiers were sent to. Per unit: id@x,y, fire=its clearance, off/prevOff=distance to the current /
+    previous leg segment; gardeners also aim=native job target (aimFire), work (0 idle, 1 busy, 2 searching, 3 working),
+    esc=WATCH-parked, cell=its campaign cell, centre=work centre, bench=1 when this recall benched it. kind=free-gardeners:
+    reclaim's free gardeners (no leg). At most 8 units per line. */
+ void pulled(const dtoffence::Campaign&c,const dtoffence::Fire&f,const std::vector<dtoffence::Soldier>&m,const std::vector<dtoffence::Pulled>&who,int ex,int ey){
+  if(who.empty())return;bool free=who[0].free,gardeners=who[0].gardener;bool leg=!free&&c.orderAt!=0;
+  int ox=0,oy=0;dtoffence::legFrom(c,ox,oy);int gx=leg?c.goalX:-1,gy=leg?c.goalY:-1,px=-1,py=-1;
+  if(leg){if(c.viaAt>=2&&c.viaAt-2<c.vias){px=c.vx[c.viaAt-2];py=c.vy[c.viaAt-2];}else if(c.viaAt==1){px=c.legX;py=c.legY;}}
+  int off=0,built=0;if(leg)offenceLegLand(ox,oy,gx,gy,region,off,built);dtoffence::Army b=m.empty()?dtoffence::Army{}:dtoffence::body(m);
+  char head[460];snprintf(head,sizeof(head),"OFFENCE_FIRE_PULL player=%u sector=%u phase=%d style=%s kind=%s leg=via %d/%d from=%d,%d to=%d,%d prev=%d,%d legFire=%.1f legOff=%d legBuilt=%d age=%u body=%d,%d bodyFire=%.1f exit=%d,%d units=%u",
+   c.player,c.sector,(int)c.phase,dtoffence::styleName(c.style),free?"free-gardeners":gardeners?"gardeners":"soldiers",leg?c.viaAt:-1,leg?c.vias:-1,leg?ox:-1,leg?oy:-1,gx,gy,px,py,leg?offenceSegFire(f,ox,oy,gx,gy):-1.0,off,built,leg?now-c.orderAt:0u,
+   m.empty()?-1:b.x,m.empty()?-1:b.y,m.empty()?-1.0:offenceFireAt(f,b.x,b.y),ex,ey,(unsigned)who.size());
+  std::string line=head;int shown=0;
+  for(auto&q:who){if(shown++>=8)break;char u[260];double uo=leg?sqrt(dtoffence::seg2(ox,oy,gx,gy,q.x,q.y)):-1.0,po=px>=0?sqrt(dtoffence::seg2(px,py,ox,oy,q.x,q.y)):-1.0;
+   if(!q.gardener)snprintf(u,sizeof(u)," [%u@%d,%d fire=%.1f off=%.1f prevOff=%.1f]",q.id,q.x,q.y,offenceFireAt(f,q.x,q.y),uo,po);
+   else snprintf(u,sizeof(u)," [%u@%d,%d fire=%.1f off=%.1f prevOff=%.1f aim=%d,%d aimFire=%.1f work=%d esc=%d cell=%d,%d centre=%d,%d bench=%d]",q.id,q.x,q.y,offenceFireAt(f,q.x,q.y),uo,po,q.aimX,q.aimY,q.aimX>=0?offenceFireAt(f,q.aimX,q.aimY):-1.0,(int)q.work,(int)q.escorted,q.cellX,q.cellY,q.centreX,q.centreY,(int)q.benched);
+   line+=u;}
+  if(who.size()>8){char more[32];snprintf(more,sizeof(more)," +%u more",(unsigned)(who.size()-8));line+=more;}
+  log(line.c_str());
  }
 };
 // The plugin stopped at runtime (fatal) or a save cannot be continued: hand
@@ -748,7 +858,10 @@ static void offenceTools(uint8_t p,uint32_t t,const dtoffence::Native::Supply&su
 static void offenceShovelGuard(uint8_t p,uint32_t t){
  auto&watch=offenceShovelWatch[p];if(watch.owed<=0)return;uintptr_t eco=offenceShovelEco[p];
  if(!nativeOffence.economyLive(p,eco)){watch=dtoffence::ShovelWatch{};return;}
- int before=nativeOffence.shovelOrdered(eco);int add=dtoffence::shovelRestore(watch,before);if(add<=0)return;
+ int before=nativeOffence.shovelOrdered(eco);int add=dtoffence::shovelRestoreWhile(watch,before,offenceIron[p]);
+ /* r33: a clear while no iron bar is in stock is left alone (the field: 1,443 restores of an order no toolsmith could serve) */
+ if(add<=0&&offenceIron[p]==0&&watch.seen==0&&before==0&&watch.owed>0&&(!offenceIronNote[p]||t-offenceIronNote[p]>=6000)){offenceIronNote[p]=t?t:1;char msg[160];snprintf(msg,sizeof(msg),"OFFENCE_TOOLS player=%u order=%d owed=%d restores=%u reason=no restore while no iron bar is in stock",p,before,watch.owed,offenceShovelRestores[p]);log(msg);}
+ if(add<=0)return;
  auto tools=nativeOffence.tools(p,eco);
  operation="offence shovel restore";bool ok=nativeOffence.orderShovels(tools,eco,add);operation="idle";int after=nativeOffence.shovelOrdered(eco);
  if(ok){watch.seen=after;offenceShovelRestores[p]++;}else watch=dtoffence::ShovelWatch{};
@@ -768,6 +881,11 @@ static void offenceRecruit(uint8_t p,uint32_t t){
  int soldiers=0;for(int i=0;i<nativeOffence.sectorCount(p);i++){std::vector<dtoffence::Soldier> free;nativeOffence.available(p,i,home.homeX,home.homeY,free);soldiers+=(int)free.size();}
  for(auto&c:campaigns[p])if(c.phase!=dtoffence::Phase::Idle)soldiers+=c.initial;
  int wanted=dtoffence::gardenersWanted(soldiers);
+ /* r37: only gardeners within LaunchReach of home count as alive for recruitment (field: 14 alive, all stranded far away,
+    none replaced, 46,000 ticks of "no gardeners"); stranded ones are called home by the decision, and at most 2*wanted exist. */
+ {std::vector<dtoffence::Gardener> all;nativeOffence.gardeners(p,home.region,all);int close=0;for(auto&g:all)if(dtoffence::distance(g.x,g.y,home.homeX,home.homeY)<=dtoffence::LaunchReach)close++;
+  supply.alive=std::max(close,supply.alive-wanted);}
+ offenceIron[p]=nativeOffence.stock(supply.eco,20); /* r33: IRONBAR (20), as the census reads it */
  offenceTools(p,t,supply,wanted);
  /* Carriers walking to a shovel are invisible (not in the per-player lists):
     an order counts as coming until a gardener more is alive or 1,200 ticks passed. */
@@ -794,6 +912,27 @@ static void offenceFire(OffenceOps&ops,uint32_t t){
   std::vector<uintptr_t> own;for(auto&c:campaigns[p])if(c.squad)own.push_back(c.squad);int x=0,y=0,n=nativeOffence.fireCensus(p,f,own,x,y);if(!n)continue;offenceFireNativeAt[p]=t;
   char note[160];snprintf(note,sizeof(note),"OFFENCE_FIRE_NATIVE player=%u soldiers=%d at=%d,%d (native AI soldiers within the fire line, not ordered by the plugin)",p,n,x,y);log(note);}
 }
+// r36 diagnostics: OFFENCE_ROUTE when a marching or homeward campaign's stored route changes (a plan), and when a replan
+// (after the fire guard) or a held way home gave the same route again (same=how often in a row). from=route start,
+// end=staging cell or home, army=initial soldiers, keep=legKeep(army), vias=waypoints with their fire clearance, legs=per leg
+// clearance/cells off the land region/cells with a building flag (see OFFENCE_FIRE_PULL).
+static void offenceRouteNote(const dtoffence::Campaign&c,uint32_t t,OffenceOps&ops){
+ RouteSeen&r=offenceRoutes[c.player][c.sector&7];bool walk=c.phase==dtoffence::Phase::March||c.phase==dtoffence::Phase::Return;
+ if(!walk){r=RouteSeen{};return;}
+ int ex=c.phase==dtoffence::Phase::Return?ops.homeX:c.stageX,ey=c.phase==dtoffence::Phase::Return?ops.homeY:c.stageY;
+ bool changed=r.phase!=(int)c.phase||r.legX!=c.legX||r.legY!=c.legY||r.vias!=c.vias||r.endX!=ex||r.endY!=ey;for(int i=0;i<c.vias&&i<dtoffence::MaxVias&&!changed;i++)if(r.vx[i]!=c.vx[i]||r.vy[i]!=c.vy[i])changed=true;
+ bool replanned=r.replanAt&&!c.replanAt,held=!r.homeless&&c.homeless;r.replanAt=c.replanAt;r.homeless=c.homeless;
+ if(!changed&&!replanned&&!held)return;
+ char msg[900];
+ if(!changed){r.same++;snprintf(msg,sizeof(msg),"OFFENCE_ROUTE player=%u sector=%u phase=%d style=%s from=%d,%d end=%d,%d vias=%d same=%u reason=%s",c.player,c.sector,(int)c.phase,dtoffence::styleName(c.style),c.legX,c.legY,ex,ey,c.vias,r.same,held?"way home held outside the fire, same route":"replanned after the fire guard, same route");log(msg);return;}
+ r.phase=(int)c.phase;r.legX=c.legX;r.legY=c.legY;r.vias=c.vias;r.endX=ex;r.endY=ey;for(int i=0;i<c.vias&&i<dtoffence::MaxVias;i++){r.vx[i]=c.vx[i];r.vy[i]=c.vy[i];}r.same=0;
+ std::vector<dtoffence::Target> all;ops.targets(c,all);dtoffence::Fire f=dtoffence::fire(c,ops,all);int army=std::max(1,(int)c.initial);
+ std::string vias,legs;int ax=c.legX,ay=c.legY;
+ for(int i=0;i<=c.vias&&i<=dtoffence::MaxVias;i++){int bx=i<c.vias?c.vx[i]:ex,by=i<c.vias?c.vy[i]:ey;char part[96];
+  if(i<c.vias){snprintf(part,sizeof(part),"%s%d,%d(%.1f)",vias.empty()?"":";",bx,by,offenceFireAt(f,bx,by));vias+=part;}
+  int off=0,built=0;offenceLegLand(ax,ay,bx,by,ops.region,off,built);snprintf(part,sizeof(part),"%s%.1f/%d/%d",legs.empty()?"":";",offenceSegFire(f,ax,ay,bx,by),off,built);legs+=part;ax=bx;ay=by;}
+ snprintf(msg,sizeof(msg),"OFFENCE_ROUTE player=%u sector=%u phase=%d style=%s from=%d,%d end=%d,%d army=%d keep=%d fire=%d vias=%s legs=%s reason=%s",c.player,c.sector,(int)c.phase,dtoffence::styleName(c.style),c.legX,c.legY,ex,ey,army,dtoffence::legKeep(army),f.on?1:0,vias.empty()?"none":vias.c_str(),legs.c_str(),replanned?"replanned after the fire guard":"planned");log(msg);(void)t;
+}
 static void offenceTick(uint32_t t){
  nativeOffence.scanTerritory(16); /* computer-owned Dark land, a full pass every 32..36 ticks */
  for(uint8_t p=2;p<=8;p++)offenceShovelGuard(p,t); /* r29 review: put back a cleared shovel order before the entity update */
@@ -801,22 +940,27 @@ static void offenceTick(uint32_t t){
  if(!offenceAdopted){offenceAdopted=true;
   for(uint8_t p=2;p<=8;p++)for(int i=0;i<nativeOffence.sectorCount(p);i++){std::vector<uintptr_t> found;nativeOffence.modSquads(p,i,found);
    for(size_t k=0;k<found.size();k++){auto&c=campaigns[p][i];c.player=p;c.sector=(uint8_t)i;std::vector<dtoffence::Soldier> m;nativeOffence.members(p,i,found[k],m);
-    if(k==0){ops.region=nativeOffence.strength(p,i).region;dtoffence::adopt(c,t,found[k],(int)m.size(),ops);}
+    if(k==0){auto st=nativeOffence.strength(p,i);ops.region=st.region;ops.homeX=st.homeX;ops.homeY=st.homeY;ops.now=t;dtoffence::adopt(c,t,found[k],(int)m.size(),ops);}
     else{dtoffence::Campaign extra=c;extra.squad=found[k];ops.dissolve(extra);}}}}
  offenceFire(ops,t);
  for(uint8_t p=2;p<=8;p++){
   bool active=nativeOffence.enemyOfDark(p)&&nativeOffence.playerAI(p);int n=active?nativeOffence.sectorCount(p):0;
   if(active)offenceRecruit(p,t);else offenceShovelWatch[p]=dtoffence::ShovelWatch{};
+  {auto&s=reserveSeen[p];auto&l=reserveLogged[p];bool held=s.native<s.keep,was=l.native<l.keep;if(s.keep&&(s.keep!=l.keep||held!=was)){l=s;char msg[160];snprintf(msg,sizeof(msg),"CARRIER_RESERVE player=%u native=%d keep=%d buildings=%d set=%d held=%d",(unsigned)p,s.native,s.keep,s.buildings,s.set,held?1:0);log(msg);}} /* r43: the floor and whether it holds the AI's value up */
   if(active&&t%3000==0){int owned=nativeOffence.ownedDark(p);dtoffence::Strength home{};for(int i=0;i<n&&!home.ok;i++)home=nativeOffence.strength(p,i);
    /* What keeps this computer attacking: barracks, weapons, carriers, soldiers, gardeners, and the Dark land it owns. */
-   if(home.ok){auto k=nativeOffence.census(p,home.homeX,home.homeY);char msg[340];snprintf(msg,sizeof(msg),"OFFENCE_SUPPLY player=%u barracks=%d swords=%d bows=%d raceWeapons=%d shovels=%d carriers=%d inFlight=%d reserve=%d soldiers=%d gardeners=%d ownedDarkCells=%d economy=%u toolsmiths=%d shovelOrder=%d ironbars=%d coal=%d",
-    p,k.barracks,k.swords,k.bows,k.special,k.shovels,k.carriers,k.busy,k.reserve,k.soldiers,k.gardeners,owned,(unsigned)k.eco,k.toolsmiths,k.shovelOrder,k.ironbars,k.coal);log(msg);}}
+   if(home.ok){auto k=nativeOffence.census(p,home.homeX,home.homeY);char msg[360];snprintf(msg,sizeof(msg),"OFFENCE_SUPPLY player=%u barracks=%d swords=%d bows=%d raceWeapons=%d shovels=%d carriers=%d inFlight=%d reserve=%d keep=%d soldiers=%d gardeners=%d ownedDarkCells=%d economy=%u toolsmiths=%d shovelOrder=%d ironbars=%d coal=%d",
+    p,k.barracks,k.swords,k.bows,k.special,k.shovels,k.carriers,k.busy,k.reserve,reserveSeen[p].keep,k.soldiers,k.gardeners,owned,(unsigned)k.eco,k.toolsmiths,k.shovelOrder,k.ironbars,k.coal);log(msg);}}
   for(int i=0;i<8;i++){auto&c=campaigns[p][i];c.player=p;c.sector=(uint8_t)i;
    if(i>=n){if(c.phase!=dtoffence::Phase::Idle){if(!active&&nativeOffence.sector(p,i))ops.dissolve(c); /* no longer an enemy: give the soldiers back */c.reason=active?"sector gone":"not an enemy any more";ops.report(dtoffence::Event::Lost,c);dtoffence::toIdle(c,t);}continue;}
-   ops.region=nativeOffence.strength(p,i).region;dtoffence::step(c,t,ops);}
+   auto st=nativeOffence.strength(p,i);ops.region=st.region;ops.homeX=st.homeX;ops.homeY=st.homeY;ops.now=t;dtoffence::step(c,t,ops);offenceRouteNote(c,t,ops);}
  }
 }
-static HRESULT __stdcall mapInit(LPVOID,LPVOID){dtdiag::beat(false,false);running=false;placementHints.reset();AcquireSRWLockExclusive(&stateLock);initialized=false;newMap=true;offenceReset();ordinarySelectionPending=false;destinationControls=false;boarding.clear();cachedSelection.clear();cachedFleet.clear();lastSelection=0;chosenAircraft=0;chosenIdentity=0;draftIdentity=0;buildOverride=false;fleetPick.clear();cachedPick.clear();unloadJobs.clear();unloadGroup.clear();unloadTargeting=false;ReleaseSRWLockExclusive(&stateLock);AcquireSRWLockExclusive(&commandLock);commands.clear();ReleaseSRWLockExclusive(&commandLock);return 0;}
+// Dark-land sight marks (darkSightTick), transient: emptied on every map init.
+// r42: the whole-map reveal toggle (revealTick), transient.
+static bool revealAll=false,revealWas=false;static uint32_t revealLogAt=0;
+static std::vector<uint8_t> sightShown;static bool sightFull=false,sightMissing=false;static uint32_t sightReturned=0,sightLogAt=0;
+static HRESULT __stdcall mapInit(LPVOID,LPVOID){dtdiag::beat(false,false);running=false;placementHints.reset();AcquireSRWLockExclusive(&stateLock);initialized=false;newMap=true;offenceReset();ordinarySelectionPending=false;destinationControls=false;boarding.clear();cachedSelection.clear();cachedFleet.clear();lastSelection=0;chosenAircraft=0;chosenIdentity=0;draftIdentity=0;buildOverride=false;fleetPick.clear();cachedPick.clear();unloadJobs.clear();unloadGroup.clear();unloadTargeting=false;sightShown.clear();sightReturned=0;sightLogAt=0;revealAll=false;revealWas=false;revealLogAt=0;for(auto&r:reserveSeen)r=ReserveSeen{};for(auto&r:reserveLogged)r=ReserveSeen{};ReleaseSRWLockExclusive(&stateLock);AcquireSRWLockExclusive(&commandLock);commands.clear();ReleaseSRWLockExclusive(&commandLock);return 0;}
 // Pinned 0.2.4 failure evidence: CBarrackRole needs an owned entrance economy.
 // Read-only diagnostics run on ticks; they never patch game sector/player state.
 static void logStartingSectors(){
@@ -834,10 +978,32 @@ static void initialize(uint32_t t){boarding.clear();offenceReset();destinationCo
  if(!dt::retireLegacyFarmState(state)){fatal=true;running=false;log("Invalid legacy farm state; save refused");}
  if(held||state.harvested||pendingLoad.pending){char msg[192];snprintf(msg,sizeof(msg),"Legacy farm bookkeeping retired: held=%llu pending=%u; native bank and units unchanged",(unsigned long long)held,pendingLoad.pending);log(msg);}
 }hasPendingLoad=false;ReleaseSRWLockExclusive(&ioLock);if(fatal)return;if(!restored&&(t>100||luaConstant("DT_IsNew")!=1)){fatal=true;running=false;say("This saved game cannot be continued. Start a new game of this scenario.");log("Unsupported save or missing sidecar; economy disabled");return;}state.tick=t;initialized=true;newMap=false;running=true;say(restored?"":"");fireStartPending=!restored;fireLoadPending=restored; /* r30: start-map farms in a citadel fire field on new maps; on a load, farms an older round left inside a field */log(restored?"State restored from matching save hash":"New Dark economy initialized");}
+// r42: Alt+9 toggles the whole-map reveal (dt::revealPending every tick while on). The keys are polled on the tick
+// (S4ModApi has no keyboard callback) and count only while this process owns the foreground window and a map runs.
+static void revealTick(uint32_t t){
+ HWND fg=GetForegroundWindow();DWORD pid=0;if(fg)GetWindowThreadProcessId(fg,&pid);
+ bool down=pid==GetCurrentProcessId()&&inGame()&&(GetAsyncKeyState(VK_MENU)&0x8000)&&(GetAsyncKeyState('9')&0x8000);
+ if(dt::pressed(down,revealWas)){revealAll=!revealAll;char msg[96];snprintf(msg,sizeof(msg),"MAP_REVEAL %s (Alt+9) tick=%u",revealAll?"on":"off",t);log(msg);}
+ if(!revealAll)return;BYTE*land=peek<BYTE*>(image+0xd69220);uint32_t cells=(uint32_t)side()*side();if(!cells||!readable(land,cells*4))return;
+ uintptr_t fogManager=image+0x1159d30;BYTE*fog=peek<BYTE*>(fogManager+0xc);if(peek<BYTE*>(fogManager+8)!=land||!readable(fog,cells))return;
+ uint32_t n=dt::revealPending(fog,cells);if(n&&t-revealLogAt>=3000){revealLogAt=t;char msg[96];snprintf(msg,sizeof(msg),"MAP_REVEAL pending cleared cells=%u",n);log(msg);}
+}
+// Dark-land sight (dt::darkSight): Dark cells show visible, and cells a
+// computer greened again go back to the native fog merge. The shown map is
+// transient: mapInit empties it and the first pass re-checks every non-Dark
+// cell once (also heals cells an older round left visible in a save).
+static void darkSightTick(uint32_t t){BYTE*land=peek<BYTE*>(image+0xd69220);uint32_t cells=(uint32_t)side()*side();if(!cells||!readable(land,cells*4))return;
+ uintptr_t fogManager=image+0x1159d30;BYTE*fog=peek<BYTE*>(fogManager+0xc); /* slot 2 (RVA 0x1AE600) stores the landscape at +8 and the fog byte map at +0xC */
+ if(peek<BYTE*>(fogManager+8)!=land||!readable(fog,cells)){fog=nullptr;if(!sightMissing){sightMissing=true;log("DARK_SIGHT fog map unavailable; greened cells keep their fog until it returns");}}else sightMissing=false;
+ if(sightShown.size()!=cells){sightShown.assign(cells,1);sightFull=true;}
+ auto r=dt::darkSight(land,fog,sightShown.data(),cells);char msg[160];
+ if(fog&&sightFull){sightFull=false;snprintf(msg,sizeof(msg),"DARK_SIGHT fog re-checked map=%d dark=%u handedBack=%u",side(),r.revealed,r.returned);log(msg);}else sightReturned+=r.returned;
+ if(sightReturned&&t-sightLogAt>=600){snprintf(msg,sizeof(msg),"DARK_SIGHT greened cells handed back to native fog=%u dark=%u",sightReturned,r.revealed);log(msg);sightReturned=0;sightLogAt=t;}
+}
 static HRESULT __stdcall tick(DWORD,BOOL,BOOL){dtmem::Scope memoryScope;tickAt=GetTickCount64();dtdiag::beat(true,true);if(hdIsActive){hdActive=hdIsActive()!=FALSE;bool blocked=hdMouseBlocked()!=FALSE;if(blocked!=hdBlocked.exchange(blocked)){log(blocked?"HD_STATE mouse blocked by HD (panel hidden)":"HD_STATE mouse unblocked");}}bool match=signature();sceneMatches=match;if(fatal||!match){if(fatal&&match&&peek<uint32_t>(image+0xe66b14)>=10){AcquireSRWLockExclusive(&stateLock);offenceStopLocked();ReleaseSRWLockExclusive(&stateLock);}running=false;return 0;}uint32_t t=peek<uint32_t>(image+0xe66b14);if(t<10)return 0;if(!scenarioVersion()){running=false;return 0;}nativeTick=t;AcquireSRWLockExclusive(&stateLock);if(!initialized||newMap){initialize(t);if(!fatal)logStartingSectors();}if(fatal){offenceStopLocked();ReleaseSRWLockExclusive(&stateLock);return 0;}running=true;if(t<state.tick){initialized=false;running=false;ReleaseSRWLockExclusive(&stateLock);return 0;}state.tick=t;std::vector<Command> todo;AcquireSRWLockExclusive(&commandLock);todo.swap(commands);ReleaseSRWLockExclusive(&commandLock);construction(t);if(fatal){ReleaseSRWLockExclusive(&stateLock);return 0;}actions(todo,t);dtmem::invalidate();if(fatal){ReleaseSRWLockExclusive(&stateLock);return 0;}bool hintsChanged=false;unsigned hintsChecked=0,hintsValid=0;operation="Dark placement hint scan";bool hintsOkay=placementHints.update(t,hintsChanged,hintsChecked,hintsValid);operation="idle";dtmem::invalidate();if(!hintsOkay){fatal=true;running=false;log("Pinned placement cache validation failed; plugin disabled");ReleaseSRWLockExclusive(&stateLock);return 0;}if(hintsChanged){char msg[140];snprintf(msg,sizeof(msg),"PLACEMENT_HINTS kind=%d checked=%u valid=%u automatic viewport scan",peek<int>(image+0x1086548),hintsChecked,hintsValid);log(msg);}{dtplacement::Hints::Diag d;int kind=0;dt::HintBox area;static uint64_t lastScanLog=0;static dtplacement::Hints::Diag lastLogged{};uint64_t now=GetTickCount64();
  if(placementHints.report(d,kind,area)&&(now-lastScanLog>=5000)&&memcmp(&d,&lastLogged,sizeof(d))){lastScanLog=now;lastLogged=d;char msg[260];
   snprintf(msg,sizeof(msg),"PLACEMENT_SCAN kind=%d view=%d,%d-%d,%d darkAnchors=%u valid=%u anchorFlags=%u (bits 01:%u 02:%u 04missing:%u 08:%u 10:%u 40:%u) terrain=%u footprintOrSlope=%u fireBlockade=%u",
-   kind,area.left,area.top,area.right,area.bottom,d.dark,d.valid,d.flagged,d.bits[0],d.bits[1],d.bits[2],d.bits[3],d.bits[4],d.bits[6],d.terrain,d.footprint,d.fire);log(msg);}}boardingOrders(t);unloadJobsTick(t);offenceTick(t);if(unloadTargeting.load()&&unloadGroup.empty())unloadTargeting=false;if(t%5==0){aircraftJobs(t);BYTE*land=peek<BYTE*>(image+0xd69220);uint32_t cells=(uint32_t)side()*side();if(cells&&readable(land,cells*4)){for(uint32_t i=0;i<cells;i++)if(land[4*i+2]&64)land[4*i+3]&=0xc0;}}
+   kind,area.left,area.top,area.right,area.bottom,d.dark,d.valid,d.flagged,d.bits[0],d.bits[1],d.bits[2],d.bits[3],d.bits[4],d.bits[6],d.terrain,d.footprint,d.fire);log(msg);}}boardingOrders(t);unloadJobsTick(t);offenceTick(t);if(unloadTargeting.load()&&unloadGroup.empty())unloadTargeting=false;revealTick(t);if(t%5==0){aircraftJobs(t);darkSightTick(t);}
 
  if(!dt::valid(state)){say("Dark Tribe stopped after an error. Please restart the game.");fatal=true;running=false;log("Resource conservation failure");}
  cachedSelection.clear();cachedFleet.clear();
@@ -999,7 +1165,10 @@ static DWORD WINAPI start(void*){char path[MAX_PATH];GetModuleFileNameA(ownModul
  BYTE readd[]={0x0f,0xb7,0x46,0x08,0x50,0x6a,0x01,0xe8};BYTE remove[]={0x55,0x8b,0xec,0x83,0xec,0x2c,0x8b,0x45,0x08,0x89,0x4d,0xfc};
  BYTE circle[]={0x55,0x8b,0xec,0x83,0xec,0x0c,0x8b,0x45,0x10,0x33,0xd2,0x53,0x8b,0x1d};BYTE band[]={0x51,0x50,0x52,0x8b,0xcb,0xe8};
  if(memcmp((void*)(image+0x1ae100),circle,sizeof(circle))||memcmp((void*)(image+0x1ae395),band,sizeof(band))||memcmp((void*)(image+0x189cd3),arrival,sizeof(arrival))||memcmp((void*)(image+0x132ebf),readd,sizeof(readd))||memcmp((void*)(image+0x16d720),remove,sizeof(remove))){fatal=true;log("Pinned passenger arrival signatures mismatch; plugin disabled");return 12;}}
- if(!nativeConstruction.initialize(image)){fatal=true;log("Pinned in-place construction signatures mismatch; plugin disabled");return 11;}if(!nativeOffence.initialize(image)){fatal=true;log("Pinned computer offence signatures mismatch; plugin disabled");return 13;}offencePinned=true;log("Pinned native rise, reservation and completion verified; reserved cells checked for occupancy only; tick read cache r3; ordinary-site rise, aircraft group and sight r4; site panel, passengers and terrain sight r5; native temporary aircraft vision r6; aircraft right-click r7; aircraft selection marker r8; targeted unload r9; load nearby r10; radius 24 r11; site eviction r12; eviction and HD panel diagnostics r13; wild animals do not block r14; native-style Dark UI and Manacopter health r15; native game art menus r16; engine unit portraits r17; right-drag pan, text bounds and native recruitment cluster r18; player-facing texts only r19; mana section, aircraft panel and base limit r20; Hall panel like the aircraft panel r21; hidden outside a running map r22; placement scan diagnostics r23; Iron Kingdom scenario r24; The Alliance scenario and 512 maps r25; crash and freeze diagnostics r26; computer offence against the Dark Tribe r27; attack styles, re-attacks and territory greening r28; toolsmith shovel orders r29; citadel fire keep-off and farm blockade r30; clean start maps r31; scaled styles and protected convoy r32");if(!placementHints.initialize(image)){fatal=true;log("Pinned Dark placement signatures mismatch; plugin disabled");return 10;}log("Pinned Dark placement validator and marker cache verified");if(!nativeFarmIncomeIntact()||!installIncomeHook()){fatal=true;log("Pinned income signature mismatch; plugin disabled");return 2;}
+ { /* r35: Dark-land sight relies on the fog merge (RVA 0x1AE3F0) skipping 8-cell groups whose fog bytes count 3 stable cycles (bits 6-7 == 0xC0), and on its step table 0xC1BD30 (0x40 count step, 0x18 explored, 0x07 current, 0x38 pending, 0xC0 counter) */
+ BYTE merge[]={0xba,0x30,0xbd,0x01,0x01,0x8b,0x75,0xf4,0x8b,0x7d,0xf0,0x0f,0x6f,0x72,0x18,0x0f,0x6f,0x7a,0x20,0x8b,0x4d,0xec,0x0f,0x74,0xed,0x0f,0x6f,0x0e,0x0f,0x6f,0xd1,0x0f,0xdb,0x52,0x10,0x0f,0x6f,0xda,0x0f,0x73,0xf3,0x03,0x0f,0x6f,0xc1,0x0f,0xdb,0xc6,0x0f,0xeb,0xd3,0x0f,0x74,0xd8,0x0f,0xdb,0xcb,0x0f,0xdb,0x1a,0x0f,0xdc,0xcb,0x0f,0xdb,0xcf,0x0f,0x6f,0xdf,0x0f,0x74,0xd9,0x0f,0x7e,0xd8,0x0f,0x73,0xd3,0x20,0x0f,0x7e,0xdb,0x23,0xc3,0x0f,0xeb,0xca,0x0f,0x7f,0x0e,0x83,0xf8,0xff,0x0f,0x84,0x9d,0x00,0x00,0x00};uint32_t steps=(uint32_t)(image+0xc1bd30);memcpy(merge+1,&steps,4);BYTE table[40];const BYTE lanes[5]={0x40,0x18,0x07,0x38,0xc0};for(int i=0;i<40;i++)table[i]=lanes[i/8];
+ if(memcmp((void*)(image+0x1ae438),merge,sizeof(merge))||memcmp((void*)(image+0xc1bd30),table,sizeof(table))){fatal=true;log("Pinned fog merge signature mismatch; plugin disabled");return 15;}}
+ if(!nativeConstruction.initialize(image)){fatal=true;log("Pinned in-place construction signatures mismatch; plugin disabled");return 11;}if(!dtconstruction::PanelGuard::install(image)){fatal=true;log("Pinned site panel entry mismatch; plugin disabled");return 14;}if(!nativeOffence.initialize(image)){fatal=true;log("Pinned computer offence signatures mismatch; plugin disabled");return 13;}offencePinned=true;log("Pinned native rise, reservation and completion verified; reserved cells checked for occupancy only; tick read cache r3; ordinary-site rise, aircraft group and sight r4; site panel, passengers and terrain sight r5; native temporary aircraft vision r6; aircraft right-click r7; aircraft selection marker r8; targeted unload r9; load nearby r10; radius 24 r11; site eviction r12; eviction and HD panel diagnostics r13; wild animals do not block r14; native-style Dark UI and Manacopter health r15; native game art menus r16; engine unit portraits r17; right-drag pan, text bounds and native recruitment cluster r18; player-facing texts only r19; mana section, aircraft panel and base limit r20; Hall panel like the aircraft panel r21; hidden outside a running map r22; placement scan diagnostics r23; Iron Kingdom scenario r24; The Alliance scenario and 512 maps r25; crash and freeze diagnostics r26; computer offence against the Dark Tribe r27; attack styles, re-attacks and territory greening r28; toolsmith shovel orders r29; citadel fire keep-off and farm blockade r30; clean start maps r31; scaled styles and protected convoy r32; computer defence and reclaim priority r33; site selection crash fix r34; reclaimed land fog and fast army marches r35; fire pull and route diagnostics r36; relentless and smart attacks r37; walked progress and steady sieges r38; Dark Gardeners leave the Manacopter r39; Iron Kingdom toolsmith hammers r40; no Manacopter healing r41; map reveal toggle r42; scaling carrier reserve r43");if(!placementHints.initialize(image)){fatal=true;log("Pinned Dark placement signatures mismatch; plugin disabled");return 10;}log("Pinned Dark placement validator and marker cache verified");if(!nativeFarmIncomeIntact()||!installIncomeHook()){fatal=true;log("Pinned income signature mismatch; plugin disabled");return 2;}if(!installNoHealing()){fatal=true;log("Pinned Manacopter healing signature mismatch; plugin disabled");return 16;}log("Manacopter healing on Dark land disabled (RVA 0x16B594)");if(!installReserveHook()){fatal=true;log("Pinned carrier reserve signature mismatch; plugin disabled");return 17;}log("Computer carrier reserve scaled with the kingdom (RVA 0x2567B8 -> 0x51C10)");
  {wchar_t exe[MAX_PATH]{};GetModuleFileNameW(nullptr,exe,MAX_PATH);std::wstring dir(exe);dir=dir.substr(0,dir.find_last_of(L"/\\")+1)+L"Gfx\\";char line[220]; // Read-only: pinned byte ranges of the game's own GUI/Dark sprites.
   if(dtgfx::library().load(dir))snprintf(line,sizeof(line),"Native GUI art ready: %s",dtgfx::library().why);else snprintf(line,sizeof(line),"Native GUI art unavailable (%s); drawn panel style kept",dtgfx::library().why);log(line);}
  HMODULE hd=GetModuleHandleW(L"S4HD-Manager.dll");if(hd){

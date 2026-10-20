@@ -1,4 +1,5 @@
 #include "construction-model.hpp"
+#include "site-panel-model.hpp"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -151,6 +152,32 @@ static void limits(){
  // Off Dark land: refused, not counted.
  {dt::State s;Sites e;e.dark=false;auto l=discover(s,e,none,{{100,51}},70);assert(e.unpaid==1&&l.state(51)==LimitFree);}
 }
+// r34: the site panel wrapper's decision and its transient view (field crash
+// pid 8768: an unpaid Farm site clicked before the plugin's tick saw it).
+static void panelGuard(){
+ using C=dt::PanelCall;dt::PanelSite s;
+ assert(dt::panelCall(s)==C::Skip); // a read the native panel makes would fault
+ s.readable=true;s.writable=true;
+ assert(dt::panelCall(s)==C::Native); // nothing needs an economy (paid site with the safe copy, no piles)
+ s.inhabitant=53;assert(dt::panelCall(s)==C::SafeView); // the field case: native Farm info, no economy
+ s.economy=true;assert(dt::panelCall(s)==C::Native); // ordinary land: untouched native panel
+ s.economy=false;s.inhabitant=0;s.tool=12;assert(dt::panelCall(s)==C::SafeView);
+ s.tool=0;for(int i=0;i<3;i++){dt::PanelSite t=s;t.piles[i]=700;assert(dt::panelCall(t)==C::SafeView);} // unpaid Temple/Fortress piles
+ s.inhabitant=53;s.busy=true;assert(dt::panelCall(s)==C::Skip); // nested call while the view is in use
+ s.busy=false;s.writable=false;assert(dt::panelCall(s)==C::Skip);
+ s.writable=true;s.readable=false;s.economy=true;assert(dt::panelCall(s)==C::Skip);
+ // The safe info keeps every byte but inhabitant/tool.
+ static uint8_t info[dt::BuildingInfoSize],safe[dt::BuildingInfoSize];
+ for(unsigned i=0;i<dt::BuildingInfoSize;i++)info[i]=(uint8_t)(i*7+1);
+ dt::panelSafeInfo(safe,info);
+ for(unsigned i=0;i<dt::BuildingInfoSize;i++)assert(safe[i]==(i==dt::InfoInhabitant||i==dt::InfoTool?0:info[i]));
+ assert(info[dt::InfoInhabitant]&&info[dt::InfoTool]); // the native table is never written
+ // The view is visible during the call only and restored exactly.
+ struct Role {uintptr_t info;uint16_t piles[3];} role{(uintptr_t)info,{11,12,13}};int calls=0;
+ dt::withPanelView(&role.info,role.piles,(uintptr_t)safe,[&]{calls++;assert(role.info==(uintptr_t)safe&&!role.piles[0]&&!role.piles[1]&&!role.piles[2]);
+  auto*seen=(const uint8_t*)role.info;assert(!seen[dt::InfoInhabitant]&&!seen[dt::InfoTool]);});
+ assert(calls==1&&role.info==(uintptr_t)info&&role.piles[0]==11&&role.piles[1]==12&&role.piles[2]==13);
+}
 int main(){
  assert(dt::FoundationCancelMode==1&&dt::growthTicks(49)==40&&dt::growthTicks(80)==60&&dt::growthTicks(50)==80&&dt::growthTicks(51)==100);
  assert(dt::foundationIdentity(100)&&!dt::foundationIdentity(0)&&!dt::foundationIdentity(0x20000064)&&!dt::foundationIdentity(0x40000064));
@@ -207,7 +234,9 @@ int main(){
  st.construction[0].refunded=1;assert(dt::valid(st));
  limits();
  fireBlockade();
+ panelGuard();
  puts("PASS: all four in-place constructions keep their site identity, wait for units without timeout refunds, single refunds/cancellation for static or lost sites, unpaid and legacy jobs never recreated, fatal transaction/completion failures");
  puts("PASS: one Dark Temple and one Dark Fortress: built, site and pending jobs count, refunded/lost do not, a second site (also two in one tick) is cancelled before payment");
  puts("PASS: citadel fire blockade (r30): no Farm within Euclid 33 of a Temple/Fortress fire centre, no citadel whose field would hold a Farm, refused before payment, Hall never blocked");
+ puts("PASS: site panel guard (r34): native panel with an economy or nothing to read, transient safe view (info without inhabitant/tool, no piles) restored after the call, skip on unreadable/busy");
 }

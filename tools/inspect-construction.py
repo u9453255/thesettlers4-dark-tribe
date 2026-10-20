@@ -7,7 +7,7 @@ from construction_pins import PINS,generate
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'work/python'))
 import capstone,pefile
-DATA_PINS={0xc591bc,0xc59284,0xc58ae8,0xc593d0,0x14236c,0xc585e4+0x40,0xc585e4+0x10,0xc58ae8+0x2c}
+DATA_PINS={0xc59214,0xc591bc,0xc59284,0xc58ae8,0xc593d0,0x14236c,0xc585e4+0x40,0xc585e4+0x10,0xc58ae8+0x2c}
 
 def run():
     executable=game_exe();pin=verify_executable(executable)
@@ -68,6 +68,7 @@ def run():
     source=(ROOT/'native/dark-tribe.cpp').read_text(encoding='utf-8')
     growth=(ROOT/'native/construction-native.hpp').read_text(encoding='utf-8')
     model=(ROOT/'native/construction-model.hpp').read_text(encoding='utf-8')
+    aircraft_model=(ROOT/'native/aircraft-model.hpp').read_text(encoding='utf-8')
     assert 'BuildingsAdd(' not in source and 'nativeConstruction.initialize(image)' in source
     for forbidden in ['lua','AcquireSRWLock','SendWarriors','LandscapeIsOccupied','BuildingsDelete']:
         assert forbidden not in growth,forbidden
@@ -99,6 +100,57 @@ def run():
     assert ('ret','0xc') in rows(0x1ae100,0x109) and ('mov','ecx, 0x19') in rows(0x1ae306,0x10)
     assert 'image+0x16d720' in source and 'image+0x1ae100' in source
     assert 'image+0x1aed30' not in source and 'image+0x1aeef0' not in source and 'revealCircle(land' not in source
+    # r35: Dark-land sight hands greened cells back to the fog merge (RVA 0x1AE3F0). The merge counts stable cycles in
+    # fog byte bits 6-7 (paddusb 0x40, and 0xC0), skips the land byte-3 write for an 8-cell group all at 0xC0, and resets
+    # pending to current. Slot 2 (0x1AE600) stores the landscape at +8 and the fog byte map at +0xC.
+    merge=rows(0x1ae3f0,0x19b)
+    ordered(merge,('mov','eax, dword ptr [ecx + 0xc]'),('mov','eax, dword ptr [ecx + 8]'),(('mov',f'edx, {hex(base+0xc1bd30)}')),
+            ('pcmpeqb','mm3, mm0'),('pand','mm3, qword ptr [edx]'),('paddusb','mm1, mm3'),('pand','mm1, mm7'),('pcmpeqb','mm3, mm1'),
+            ('cmp','eax, -1'),('je','0x5ae538'),('mov','byte ptr [edi + 3], al'))
+    assert pe.get_data(0xc1bd30,40)==bytes([0x40]*8+[0x18]*8+[7]*8+[0x38]*8+[0xc0]*8)
+    check(0x1ae600,0x20,('mov','dword ptr [esi + 8], eax'),('mov','dword ptr [esi + 0xc], eax'))
+    assert dword(0xc60a84+2*4)==base+0x1ae600 and dword(0xc60a84+5*4)==base+0x1aeab0
+    check(0x1aeab0,0x80,('call','0x5ae3f0'))
+    assert 'image+0x1ae438' in source and 'darkSight(land,fog,sightShown.data(),cells)' in source and 'sightShown.clear()' in source
+    assert 'fog[i]&=0x3f' in aircraft_model and 'land[4*i+3]&=0xc0' in aircraft_model
+    # r39: the native unload (0x16B990) posts events 0x19 and 0x11/0xD per passenger; the settler forwards events to role
+    # slot 14 (+0x38); the Dark Gardener role's handler (0x174F10) knows only 0xD and 0x11 and otherwise re-adds the unit;
+    # the soldier (0x18A020) and computer Gardener (0x179D1A) handlers place the unit (0x182A40, stdcall id,x,y, ret 0xC),
+    # re-index it (0x1BB560, thiscall) and clear 0x8000 | 0x2100. The exit record is (byte +0x4E + 3) % 6 of 0xD69988.
+    assert dword(0xc5ad04+14*4)==base+0x174f10 and dword(0xc5bf20+27*4)==base+0x1818d0 and dword(0xc5b51c+14*4)==base+0x179a80 and dword(0xc5c3ac+14*4)==base+0x189f70
+    check(0x1818d0,0x14,('mov','ecx, dword ptr [edx + 0x58]'),('call','dword ptr [eax + 0x38]'))
+    ordered(rows(0x174f10,0x40),('cmp','eax, 0xd'),('cmp','eax, 0x11'),('test','dword ptr [esi + 0x14], 0x20000000'),('push','1'),('call','0x56d5d0'))
+    for at in (0x18a020,0x179d1a):
+        ordered(rows(at,0x50),('call','0x582a40'),('and','eax, 0xffff7fff'),('or','eax, 0x2100'))
+    check(0x18a03c,8,('call','0x5bb560'))
+    ordered(rows(0x16b990,0x160),('movsx','eax, byte ptr [esi + 0x4e]'),('add','eax, 3'),('idiv','ebx'),('mov','dword ptr [ebp - 0x24], 0x19'),('mov','dword ptr [ebp - 0x24], 0x11'),('mov','dword ptr [ebp - 0x20], 0xd'))
+    assert ('ret','0xc') in rows(0x182a40,0xd0) and ('mov','word ptr [eax + ebx*2], cx') in rows(0x182acc,0x10)
+    check(0x1bb560,0x20,('cmp','dword ptr [esi + 0x1c], 0xffff'),('call','0x5bb440'),('jmp','0x5bb330'))
+    assert 'image+0xc5ad04' in source and '((Place)(image+0x182a40))(r.second,ex,ey)' in source and '((Index)(image+0x1bb560))(u)' in source and '(bits&~0x8000u)|0x2100u' in source and 'placeUnloaded(c.entity,riders,x,y,ex,ey);' in source
+    assert source.index('int ex=x,ey=y;{int k=dt::unloadExit(p[0x4e]);')<source.index('((Unload)(image+0x16b990))(p);')<source.index('placeUnloaded(c.entity,riders,x,y,ex,ey);')
+    # r43: the AI's people manager sets the carrier reserve through CEcoManager +0x138 (0x51C10: word eco+0x20 =
+    # clamp(v, 5, 999)) as clamp(min(7n + 10, carriers - 10), 5, 80); the plugin redirects that one call (0x2567B8) to
+    # reserveHook, which raises the value to carrierKeep(completed buildings) and calls the native setter. Pins: the call
+    # site, the setter, the formula's clamp, the vtable slots and the building count table (completion increments
+    # 0x10EF624 + (p*0x53 + type)*8).
+    assert pe.get_data(0x2567ac,22)==bytes.fromhex('8b4328578b40248b48188b01ff90380100005f5e5bc3')
+    ordered(rows(0x51c10,0x2e),('mov','eax, dword ptr [ecx + 4]'),('mov','edi, dword ptr [ebp + 8]'),('movzx','ecx, word ptr [esi + 0x20]'),('cmp','edi, 5'),('mov','eax, 5'),('mov','word ptr [esi + 0x20], ax'),('ret','4'))
+    ordered(rows(0x25676e,0x50),('call','dword ptr [eax + 0x98]'),('cmp','ecx, 0xa'),('lea','edi, [eax - 0xa]'),('cmovge','edi, esi'),('cmp','edi, 5'),('mov','edi, 5'),('mov','eax, 0x50'),('cmovg','edi, eax'),('call','dword ptr [eax + 0x138]'))
+    assert ('mov','eax, dword ptr [ecx + 8]') in rows(0x51a70,3) and ('imul','eax, eax, 0x53') in rows(0x136330,0x18) and ('inc',f'dword ptr [eax*8 + {hex(base+0x10ef624)}]') in rows(0x136330,0x18)
+    assert pe.get_data(0xc2bc7c+0x138,4)==(base+0x51c10).to_bytes(4,'little') and pe.get_data(0xc2bc7c+0x80,4)==(base+0x51a70).to_bytes(4,'little')
+    assert 'static int __fastcall reserveHook(BYTE*eco,void*,int value){' in source and 'static bool installReserveHook(){' in source and 'if(!installReserveHook()){fatal=true;' in source
+    assert 'set=dtoffence::carrierReserve(value,b);' in source and 'image+0x10ef624+(uintptr_t)p*0x298' in source and 'at[12]=0xe8;' in source and 'FlushInstructionCache(GetCurrentProcess(),at+12,6)' in source and 'CARRIER_RESERVE' in source and 'for(auto&r:reserveSeen)r=ReserveSeen{};' in source
+    # r42: the Alt+9 reveal clears only the pending bits 3-5 of the fog bytes every tick (the merge then shows level 0);
+    # base bits and counters stay (saves honest, off = natural re-fogging); keys polled on the tick, foreground + in game.
+    assert 'if(fog[i]&0x38){fog[i]&=0xc7;n++;}' in aircraft_model and 'revealTick(t);if(t%5==0){aircraftJobs(t);darkSightTick(t);}' in source
+    assert 'pid==GetCurrentProcessId()&&inGame()&&(GetAsyncKeyState(VK_MENU)&0x8000)&&(GetAsyncKeyState(\'9\')&0x8000)' in source and 'revealAll=false;revealWas=false;revealLogAt=0;' in source
+    assert source.count('GetAsyncKeyState')==2 and 'MAP_REVEAL' in source
+    # r41: the Manacopter update heals a landed aircraft on Dark land to DTManakopterHitpoints every 10 ticks; the plugin
+    # NOPs that one store (88 47 21 at 0x16B594). The other hit-point writers (constructor, damage) stay.
+    ordered(rows(0x16b550,0x4c),('cmp','edx, -0xa'),('cmp','dword ptr [edi + 0x7c], -0x32'),('push','0xa'),('call','0x56d5d0'),('test','byte ptr [eax + ecx], 4'),('je','0x56b71a'),
+            ('mov',f'al, byte ptr [{hex(base+0xdcdb24)}]'),('mov','byte ptr [edi + 0x21], al'),('jmp','0x56b71a'))
+    assert pe.get_data(0x16b594,3)==bytes([0x88,0x47,0x21]) and ('mov','byte ptr [ebx + 0x21], cl') in rows(0x16af74,3) and ('mov','byte ptr [ecx + 0x21], bl') in rows(0x16b4d6,3)
+    assert 'static bool installNoHealing(){' in source and 'at[11]=0x90;at[12]=0x90;at[13]=0x90;' in source and 'FlushInstructionCache(GetCurrentProcess(),at+11,3)' in source and 'if(!installNoHealing()){fatal=true;' in source
     # r12: own idle units on the reserved shape are ordered off (throttled); the
     # mod's own moves are ignored by the send callback.
     assert 'ops.evict(j)' in model and 'void blockers(' in growth and 'internalSend' in source and 'SITE_EVICT' in source
@@ -135,6 +187,38 @@ def run():
     assert 'load?"load":"start"' in sweep and 'if(!start&&!load)for(auto id:farms)' in source
     assert 'placementHints.blockWith(&fireBlockade);' in source and 'say(dt::fireNotice(j.kind))' in source
     assert 'self.blockade->blocked(type,x,y)' in hints
+    # r34 site selection crash fix (field pid 8768: 0x143E07 read 0x8E on a new,
+    # unpaid Farm site clicked in the input batch that created it). The slot-22
+    # entry is the panel's only reference (no direct call), the panel is
+    # thiscall(role, building, flag) with `ret 8`, and the plugin repeats its
+    # economy lookup exactly before choosing the transient safe view.
+    image=pe.get_memory_mapped_image();needle=struct.pack('<I',base+0x143d10);refs=[];at=image.find(needle)
+    while at>=0:refs.append(at);at=image.find(needle,at+1)
+    assert refs==[0xc59214],[hex(r) for r in refs]
+    assert dword(0xc59214)==base+0x143d10 and 0xc59214 in relocations and rows(0x1440eb,3)==[('ret','8')]
+    assert ('mov','esi, ecx') in rows(0x143d3b,2) and ('mov','eax, dword ptr [ebp + 8]') in rows(0x143d3d,3)
+    ordered(rows(0x143d3b,0x48),('movzx','eax, word ptr [esi + 6]'),('mov','eax, dword ptr [eax*4 + 0x129bc38]'),('mov','eax, dword ptr [eax + 0x48]'),
+            ('sar','edx, 0x10'),('imul','edx, dword ptr [0x1454138]'),('add','edx, eax'),('mov','eax, dword ptr [0x15630c4]'),('movzx','eax, word ptr [eax + edx*2]'),
+            ('lea','eax, [eax + eax*4]'),('movzx','edi, word ptr [eax*4 + 0x12f1a26]'))
+    ordered(rows(0x143dc2,0x55),('mov','eax, dword ptr [esi + 0x178]'),('movsx','ebx, byte ptr [eax + 0x1df]'),('mov','ecx, dword ptr [edi*4 + 0x146c8a4]'),('call','0x4d4280'),
+            ('mov','eax, dword ptr [esi + 0x178]'),('movsx','ecx, byte ptr [eax + 0x1de]'),('mov','eax, dword ptr [edi*4 + 0x146c8a4]'),('cmp','word ptr [eax + ecx*2 + 0x24], 0'))
+    for pile,call,good in [(0x143e81,0x143eb8,'7'),(0x143ee8,0x143f1f,'0x20'),(0x143f4f,0x143f86,'0xe')]:
+        assert rows(pile,7)==[('movzx','eax, word ptr [esi + 0x%x]'%(0x1b0+2*((pile-0x143e81)//0x67)))],hex(pile)
+        assert rows(call,14)==[('mov','ecx, dword ptr [edi*4 + 0x146c8a4]'),('push',good),('call','0x4d4280')],hex(call)
+    assert ('cmp','dword ptr [eax + 0x1ec], 0') in rows(0x143e2d,7)
+    guard=growth.split('struct PanelGuard {',1)[1]
+    for text in ['module+0xc59214','module+0x143d10','*slot!=module+0x143d10','image+0xe9bc38+4u*id','image+0x1054138','image+0x11630c4','image+0xef1a26+20u*tile',
+                 'image+0x106c8a4+4u*eco','role+0x178','role+0x1b0','dt::InfoInhabitant','dt::InfoTool','__fastcall panel(void*role,void*,void*building,uint32_t flag)',
+                 'using Panel=void(__thiscall*)(void*,void*,uint32_t)','dt::withPanelView(','dt::panelCall(s)','VirtualProtect(slot,4,PAGE_READWRITE,&old)']:
+        assert text in guard,text
+    for forbidden in ['log(','fopen','new ','malloc','std::vector','std::string','AcquireSRWLock','lua','api->','snprintf']:
+        assert forbidden not in guard,forbidden
+    panel_model=(ROOT/'native/site-panel-model.hpp').read_text(encoding='utf-8')
+    assert 'constexpr unsigned BuildingInfoSize=0x32c,InfoInhabitant=0x1de,InfoTool=0x1df;' in panel_model
+    assert '*info=savedInfo;memcpy(piles,saved,sizeof(saved));' in panel_model and 'out[InfoInhabitant]=0;out[InfoTool]=0;' in panel_model
+    assert source.index('nativeConstruction.initialize(image)')<source.index('dtconstruction::PanelGuard::install(image)')<source.index('Version 0.2.15 native callbacks installed')
+    assert 'SITE_PANEL_GUARD views=' in source and 'site selection crash fix r34' in source
+    assert 'panelGuard();' in (ROOT/'native/construction-tests.cpp').read_text(encoding='utf-8')
     report=dict(version='0.2.15',game_sha256=pin['sha256'],game_started=False,live_process_read=False,
         successful_construction='same native site completes in place; no delete/recreate',
         site_role_vtable_rva='0xC591BC',phase_dispatch='2..8; mod freezes at 1',grow_kinds=[49,80],
@@ -142,6 +226,7 @@ def run():
         ordinary_completion='RVA 0x1424C0 + 0x1429F0 when an economy exists; else pile removal mirror + phase-8 sequence',
         reservation_rva='0x136470 once, skipped when native phases already reserved',
         unit_blockers='waited for without timeout refund, as native phase 7',
+        site_panel_guard='CBuildingSiteRole slot 22 (entry RVA 0xC59214 -> 0x143D10) wrapped once at startup; no economy at the entrance: transient info copy without inhabitant/tool and piles 0, restored after the call',
         generated_signature_regions=len(PINS),relocation_data_copy_bases=['0x400000','0x360000','0x60000000'],
         gameplay_completion_verified=False,economy_presence_on_dark_land_verified=False)
     (ROOT/'research/construction-inplace-checks.json').write_text(json.dumps(report,indent=2))

@@ -10,7 +10,142 @@ All in-game testing belongs to you. Offline checks cover code, pinned files, dis
 4. Start a NEW `00_Dark_Tribe_First_Dawn` custom map, player 1 human Dark and player 2 computer Viking. Keep races unchanged. Use a client height of at least 600 pixels.
 5. Observe at least two minutes before other tests: no crash or early victory/defeat. If an ending occurs, record its actual text/winner; sound alone is insufficient. Existing saves retain their old terrain, AI and bank and cannot validate the new scenario economy.
 
-## r32 checks - test first (scaled styles and protected convoy)
+## r43 checks - test first (scaling carrier reserve)
+
+A computer keeps a pool of free carriers that grows with its town (15 plus one per two completed buildings, at most 120); its barracks turn only carriers above that pool into soldiers, so new soldiers need new houses.
+
+**built, model-tested and staged with the full offline workflow on 2026-10-20 (all steps passed); not yet play-tested.** Until the startup line ends with `scaling carrier reserve r43`, you are still running r42 or older.
+
+1. Close the game and start it with `Launch Dark Tribe.cmd`. After **Dark Tribe 0.2.15 ready**, the startup line in `evidence/v02-runtime.log` ends with `map reveal toggle r42; scaling carrier reserve r43`, and a line `Computer carrier reserve scaled with the kingdom (RVA 0x2567B8 -> 0x51C10)` follows. If the log says `Pinned carrier reserve signature mismatch; plugin disabled`, stop and send the log.
+2. Play Iron Kingdom (where the drain showed) for a long round. With Alt+9, look at the computer towns now and then: carriers must keep carrying goods and building sites must still get finished late in the game; the armies should still grow, but only as houses add people.
+3. In the log, `OFFENCE_SUPPLY player=N ... carriers= ... reserve= keep=` every 3,000 ticks: `reserve` must never be below `keep`, and `carriers` should stay near or above `reserve` instead of falling to 5. `CARRIER_RESERVE player=N native= keep= buildings= set= held=1` lines show when the floor holds the AI's own value up.
+4. Tell me if the computers now attack too rarely (the pool is too big: ReservePer goes up) or still run dry (the pool is ignored: send the log).
+
+## r42 checks - test first (map reveal toggle)
+
+Alt+9 switches a view of the whole map on and off: every cell, building and unit is shown while it is on.
+
+**Staged on 2026-10-20: the full `python tools/workflow.py` passed and the staged DLL contains `map reveal toggle r42`. Not verified in game.** Until the startup line ends with `map reveal toggle r42`, you are still running r41 or older.
+
+1. Close the game and start it with `Launch Dark Tribe.cmd`. After **Dark Tribe 0.2.15 ready**, the startup line in `evidence/v02-runtime.log` ends with `no Manacopter healing r41; map reveal toggle r42`.
+2. In a running map press Alt+9: within a second the whole map should be visible, including enemy units and buildings; the log shows `MAP_REVEAL on (Alt+9)`. Press Alt+9 again: `MAP_REVEAL off`, and the fog returns within a few seconds to what your units see (never-explored areas look explored rather than black until you reload).
+3. The key must do nothing in the menus or while another window is in front. Report any flicker of fog while the reveal is on, and whether the minimap shows the revealed map too.
+4. Save while the reveal is on, switch it off, reload: the save must show the normal fog, not the revealed map.
+
+## r41 checks - test first (no Manacopter healing)
+
+A landed Manacopter no longer heals itself: its health only changes through damage (and a new aircraft starts full).
+
+**Staged on 2026-10-20: the full `python tools/workflow.py` passed and the staged DLL contains `no Manacopter healing r41`. Not verified in game.** Until the startup line ends with `no Manacopter healing r41`, you are still running r40 or older.
+
+1. Close the game and start it with `Launch Dark Tribe.cmd`. After **Dark Tribe 0.2.15 ready**, the startup line in `evidence/v02-runtime.log` ends with `Iron Kingdom toolsmith hammers r40; no Manacopter healing r41`, and a line `Manacopter healing on Dark land disabled (RVA 0x16B594)` is there. If the log says `Pinned Manacopter healing signature mismatch; plugin disabled`, stop and send the log.
+2. Land a damaged Manacopter on your Dark land and watch its health bar in the aircraft panel for a minute: it must stay where it is.
+3. Let enemy bowmen shoot a landed Manacopter: its health must go down and stay down, and it must be destroyable.
+4. Flying, landing, loading and unloading are otherwise unchanged.
+
+## r40 checks - test first (Iron Kingdom toolsmith hammers)
+
+Map change only: Iron Kingdom's Viking toolsmith now has two hammers beside its entrance (like the other maps), so the computer can replace a lost smith and keep making shovels for its Gardeners.
+
+**Staged on 2026-10-20 (with r41): the full `python tools/workflow.py` passed, `test-iron-kingdom.cjs` checks the hammer pile and the staged DLL contains `Iron Kingdom toolsmith hammers r40`. Not verified in game.** The installer upgrade replaces the installed Iron Kingdom map; a NEW Iron Kingdom game is needed, old saves keep the old start content.
+
+1. Close the game and start it with `Launch Dark Tribe.cmd`. After **Dark Tribe 0.2.15 ready**, the startup line in `evidence/v02-runtime.log` ends with `Dark Gardeners leave the Manacopter r39; Iron Kingdom toolsmith hammers r40`.
+2. Start a NEW Iron Kingdom game. Next to the Viking toolsmith at the south-east (523,463) there is now a small hammer pile with the iron bar and coal piles.
+3. Play long enough for the Vikings to lose Gardeners. `OFFENCE_SUPPLY ... shovels=` should rise above 2 again now and then and `OFFENCE_RECRUIT ... ordered=1` should follow; report a game in which `OFFENCE_TOOLS ... restores=` keeps climbing by hundreds per 1,000 ticks for a long time (the toolsmith has no smith) or `no spare shovels` lasts tens of thousands of ticks again.
+
+## r39 checks - test first (Dark Gardeners leave the Manacopter)
+
+Dark Gardeners dropped from a Manacopter now really step out: they get a ground cell like a soldier does, can be clicked normally, and enemies can attack them.
+
+**Staged on 2026-10-20: the full `python tools/workflow.py` passed and the staged DLL contains `Dark Gardeners leave the Manacopter r39`. Not verified in game.** Until the startup line ends with `Dark Gardeners leave the Manacopter r39`, you are still running r38.
+
+1. Close the game and start it with `Launch Dark Tribe.cmd`. After **Dark Tribe 0.2.15 ready**, the startup line in `evidence/v02-runtime.log` ends with `walked progress and steady sieges r38; Dark Gardeners leave the Manacopter r39`.
+2. Load Dark Gardeners into a Manacopter (click them onto it or use Load nearby), fly, land and Unload. The Gardeners should appear next to the Manacopter, be selectable with a single click like any unit, show their bracket, and start darkening land around the drop point.
+3. Drop them near enemy soldiers: the soldiers must attack them, and the computer's defence should react (`OFFENCE_DEFEND ... units=`). Report Gardeners that still cannot be clicked or hit.
+4. Unload Warriors, Throwers and a Shaman as well: unchanged behaviour. The log shows `PASSENGER_PLACED craft=... gardeners=N unplaced=0` for every unload with Gardeners; send the log if `unplaced` is ever above 0.
+
+## r38 checks - test first (walked progress and steady sieges)
+
+Fixes the r37 behaviour you saw on First Dawn: armies turned back in the middle of a march because their straight-line distance to the goal grew while they walked around the lake. Progress is now measured along the real walking route, and a siege is no longer given up because one or two soldiers stepped over the fire line.
+
+**Staged on 2026-10-20: the full `python tools/workflow.py` passed and the staged DLL contains `walked progress and steady sieges r38`. Not verified in game.** Until the startup line ends with `walked progress and steady sieges r38`, you are still running r37.
+
+1. Close the game and start it with `Launch Dark Tribe.cmd`. After **Dark Tribe 0.2.15 ready**, the startup line in `evidence/v02-runtime.log` ends with `relentless and smart attacks r37; walked progress and steady sieges r38`.
+2. First Dawn, NEW game: the Viking army should walk the whole way around the lake to your farms without turning back. `OFFENCE_AVOID ... reason=target not reached` should no longer appear on a march that is still moving.
+3. At a farm near your Temple or Fortress, a big army should keep its siege while single soldiers get pushed back out of the fire line (`OFFENCE_FIRE ... units=1`); only a real pull of several soldiers at once still counts (`lured toward the fire defence`).
+4. When the computer attacks nothing for a long time, the log now has `OFFENCE_TARGETS` lines listing every Dark building with `reach=`, `path=`, `locked=` and `region=`; send them if that happens.
+
+## r37 checks - test first (relentless and smart attacks)
+
+The computers now attack far more often and pick their targets by the real walking distance from where their army stands, chaining through groups of farms. Taking back their own land no longer stops them attacking: a small escort does it between attacks. Soldiers no longer give up a far target after a fixed time and walk home; they take the next farm from where they are.
+
+**Staged on 2026-10-20: the full `python tools/workflow.py` passed and the staged DLL contains `relentless and smart attacks r37`. Not verified in game.** Until the startup line ends with `relentless and smart attacks r37`, you are still running r36 or older.
+
+1. Close the game and start it with `Launch Dark Tribe.cmd`. After **Dark Tribe 0.2.15 ready**, the startup line in `evidence/v02-runtime.log` ends with `fire pull and route diagnostics r36; relentless and smart attacks r37`.
+2. First Dawn, NEW game: the first attack should come within 2-4 minutes of game time and the next ones a few hundred ticks after each army is home (`OFFENCE_LAUNCH` lines in the log). Report roughly how often you are attacked compared with before.
+3. Watch which farm falls next: after a farm collapses the army should go for the nearest farm it can walk to, through groups of farms, not across the map (`OFFENCE_STAGE`/`OFFENCE_RETARGET` lines show the door positions).
+4. Iron Kingdom, NEW game: the same checks; also whether attacks keep coming once the computer's Gardeners have been far away for a while (`OFFENCE_RECLAIM ... reason=gardeners called home` when they are called back).
+5. The Alliance, NEW game: the three computers should attack you from early on instead of only reclaiming their own Dark land. Reclaiming still happens between attacks with a few soldiers (`OFFENCE_DEFEND ... reason=start: serious intrusion` with a small `army=`; `deferred: attacks first` while an attack is possible).
+6. Report armies that stand around doing nothing for minutes, attacks that repeatedly fail (`OFFENCE_AVOID ... reason=target not reached` or `orders not executed` on the same farm), and any computer whose Gardeners never come back.
+
+## r36 checks - test first (fire pull and route diagnostics)
+
+No gameplay change: this round only adds log lines to find out why computer soldiers and Gardeners keep turning back at the edge of the Temple/Fortress fire and why Gardeners get lost there.
+
+**Staged on 2026-10-20: the full `python tools/workflow.py` passed and the staged DLL contains `fire pull and route diagnostics r36`. Not verified in game.** Until the startup line ends with `fire pull and route diagnostics r36`, you are still running r35.
+
+1. Close the game and start it with `Launch Dark Tribe.cmd`. After **Dark Tribe 0.2.15 ready**, the startup line in `evidence/v02-runtime.log` ends with `reclaimed land fog and fast army marches r35; fire pull and route diagnostics r36`.
+2. Start a NEW First Dawn game (or another scenario) and keep at least one Mushroom Farm, so the Temple/Fortress fire stays on. Let the computers attack farms near your Temple or Fortress and walk home past it; a Dark Gardener in their land makes them defend and walk past it too.
+3. When you see soldiers or Gardeners turning back at the fire, or Gardeners leaving their army, note the rough game time. Play on for a while afterwards so the log has the whole episode.
+4. Send `evidence/v02-runtime.log`. It now has `OFFENCE_FIRE_PULL` lines (each unit turned back, where it stood and which leg it was walking) and `OFFENCE_ROUTE` lines (each planned route and each replan that came out the same).
+
+## r35 checks - test first (reclaimed land fog and fast army marches)
+
+Land you darkened and a computer turned green again now goes back to the normal fog. Computer armies march at full walking speed; their Gardeners follow behind instead of holding the army back. This replaces the r32/r33 convoy behaviour described in the r33 checks below (the soldiers no longer wait on the way or walk back for slow Gardeners).
+
+**Staged.** Staged on 2026-10-20: the full `python tools/workflow.py` passed and the staged DLL contains `reclaimed land fog and fast army marches r35`. Until the startup line ends with `reclaimed land fog and fast army marches r35`, you are still running r34 or older.
+
+1. Close the game and start it with `Launch Dark Tribe.cmd`. After **Dark Tribe 0.2.15 ready**, the startup line in `evidence/v02-runtime.log` ends with `site selection crash fix r34; reclaimed land fog and fast army marches r35`. If the log says `Pinned fog merge signature mismatch; plugin disabled`, stop and send the log.
+2. Fog: start a NEW First Dawn game. Darken land near or inside the Vikings' territory and let their Gardeners turn it green again (or watch a defence reclaim it). Once a patch is green and none of your units stands near it, it should dim to the normal explored fog within a few seconds. Your own Dark land must stay fully visible, and green land next to your units stays visible as usual.
+3. Fog in a save: load a save where reclaimed green land was still lit (from r34 or older). A few seconds after the load the lit green areas should dim. The log shows `DARK_SIGHT fog re-checked map=... dark=... handedBack=...` once per map and `DARK_SIGHT greened cells handed back to native fog=...` when land was reclaimed. Report any `DARK_SIGHT fog map unavailable` line.
+4. Army speed: watch computer attacks and defences on the march. The soldiers should walk to their target in one go at normal walking speed, without stop-and-go, with the Gardeners following behind them.
+5. Near the target the army may wait for its Gardeners for up to about 300 ticks (about 20 seconds at normal speed): `OFFENCE_CONVOY ... reason=waiting for gardeners`, then `assault before the gardeners` if they are still late. There should be no long series of `waiting for gardeners` lines any more, and no `army walks back to the gardeners` or `gardeners do not follow`.
+6. Late Gardeners should still reach the farm, wait behind the soldiers and green it; farms should fall as before. Report Gardeners that never arrive, or that Dark fighters often kill on the way.
+7. Big armies (100+ soldiers, late in the game): report if one still hardly moves, with `OFFENCE_ORDER_IGNORED ... reason=order not executed` repeating for the same targets.
+
+## r34 checks - test first (site selection crash fix)
+
+Clicking a Dark building site right after placing it crashed the game (r33, 26 s into First Dawn). The native site panel now gets a safe view of any site that has no ordinary economy at its entrance.
+
+**Staged.** Staged on 2026-10-19: the full `python tools/workflow.py` passed and the staged DLL contains `site selection crash fix r34`. Until the startup line ends with `site selection crash fix r34`, you are still running r33 or older.
+
+1. Close the game and start it with `Launch Dark Tribe.cmd`. After **Dark Tribe 0.2.15 ready**, the startup line in `evidence/v02-runtime.log` ends with `computer defence and reclaim priority r33; site selection crash fix r34`. If the log says `Pinned site panel entry mismatch; plugin disabled`, stop and send the log.
+2. Start a NEW First Dawn game. Place a Mushroom Farm and click the new site immediately, as fast as you can. Repeat 5-10 times, also with several farms placed quickly in a row and each clicked at once. No crash.
+3. Click sites that are refused: place a Farm with too little mana or inside the citadel fire field, or a second Temple/Fortress, and click the outline right away. No crash; the site disappears as before.
+4. Place a Temple, a Fortress and a Manacopter Hall and click each site immediately and again while it grows. No crash; each site still grows and completes.
+5. Let a Farm complete and check that its Mushroom Farmer still arrives and the farm produces as before.
+6. Save while a site grows, load, and click the site at once after the load. No crash.
+7. `SITE_PANEL_GUARD views=... skips=...` lines may appear when such a site panel was shown; send them with any crash lines (`FIRST_CHANCE`).
+
+## r33 checks - test first (computer defence and reclaim priority)
+
+The computers now defend their land. When your Dark Gardeners or fighters spread Dark land into a computer's territory, it sends soldiers together with its own Gardeners to fight your units there and turn the land green again, before it goes on attacking. Gardeners that travel with soldiers are now parked next to them and no longer wander off to green land on their own.
+
+**Staged.** Staged on 2026-10-19: the full `python tools/workflow.py` passed and the staged DLL contains `computer defence and reclaim priority r33`. Until the startup line ends with `computer defence and reclaim priority r33`, you are still running r32.
+
+1. Close the game and start it with `Launch Dark Tribe.cmd`. After **Dark Tribe 0.2.15 ready**, the startup line in `evidence/v02-runtime.log` ends with `scaled styles and protected convoy r32; computer defence and reclaim priority r33`. If it says `Pinned computer offence signatures mismatch; plugin disabled`, stop and send the log.
+2. Start a NEW First Dawn game. Send Dark Gardeners (and some Warriors/Throwers) into the Vikings' territory and darken land there. Within a few hundred ticks soldiers should march there with Gardeners (`OFFENCE_DEFEND ... reason=start: intrusion` or `start: serious intrusion`), stand next to your units and attack them, while their Gardeners green the land nearby. Report whether the soldiers really fight your Dark Gardeners, and whether they now stand idle anywhere near your Dark land.
+3. In the log, `OFFENCE_DEFEND` shows `units=` (your units in or near their territory), `fighters=`, `own=` (Dark cells they own) and `rise=` (growth per scan). `phase=3` with `reason=land clean`, `defence time` or `threat too strong` is the end of a defence. `declined: ...` says why a defence did not start.
+4. `OFFENCE_RECLAIM` lines should now appear in every game where a computer owns Dark land: `own territory` / `border` when Gardeners are sent, `none sent: ...` when none could go (sent at most every 3,000 ticks), and `parked gardener sent home`. Report if a computer owns many Dark cells (`OFFENCE_SUPPLY ownedDarkCells=`) for a long time without any defence or reclaim line.
+5. Attacks still happen. Leave the computers' land alone for a while: raids, assaults and the other styles should still come (`OFFENCE_LAUNCH`). While you keep darkening their land, they defend first and attack less; report whether that feels too passive or too strong.
+6. Watch a convoy (an attack or a defence on the march). Gardeners should stay right behind the soldiers, stand still when the soldiers stop and never walk off to green land on the way. `OFFENCE_CONVOY reason=army walks back to the gardeners` means the soldiers turned back for slow Gardeners; `gardeners do not follow` means the march was given up. No Gardener should be sent home alone.
+7. At a farm under attack, the waiting Gardeners stand behind the soldiers and only start greening when the soldiers hold the position. None should stray far from the soldiers.
+8. A farm the computer cannot reach (First Dawn: the Vikings behind the lake and the river) should not be attacked at all, or be dropped after one or two tries: `OFFENCE_AVOID ... reason=target not reached` or `orders not executed`, then attacks on other targets or a long pause. Report if the same farm is attacked again and again.
+9. The r30 fire rules still apply: while you have farms, no soldier or Gardener of a defence or attack comes within about 27 tiles of your Temple/Fortress.
+10. Save during a defence and load: no crash. The squad is adopted (`OFFENCE_ADOPT`) as an ordinary raid or assault (the defence itself is not saved); if your units are still in their land, a new `OFFENCE_DEFEND ... recall` or `start` line should follow.
+11. Send all `OFFENCE_` lines of the session, including `OFFENCE_DEFEND`, `OFFENCE_RECLAIM`, `OFFENCE_CONVOY` and `OFFENCE_TOOLS`.
+
+## r32 checks (scaled styles and protected convoy)
 
 Every attack style now grows with the computer's army, and the soldiers march together with their Gardeners instead of running ahead. At the target the soldiers stand between your fighters and the Gardeners. The Gardeners wait behind them and start greening only once the soldiers hold the position.
 

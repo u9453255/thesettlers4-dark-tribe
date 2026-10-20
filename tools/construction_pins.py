@@ -18,5 +18,10 @@ PINS=[(0x136470,36),(0x1364f2,24),(0x1362f0,37),(0x136317,48),
       # (race-3 economy skip, Kill(id,0)), Kill's CBuilding slot 4 call, slot 4
       # -> 0x13C680 ready/site counter decrement, Farm slot 11 credit byte +0x25.
       (0x1c4d4c,0x23),(0x136a26,0x58),(0x16d1c7,7),(0xc585e4+0x10,4),(0x1362a9,10),
-      (0x13c719,0x5d),(0xc58ae8+0x2c,4),(0x145050,0x23)]
+      (0x13c719,0x5d),(0xc58ae8+0x2c,4),(0x145050,0x23),
+      # r34 site panel guard: the CBuildingSiteRole slot-22 entry the plugin
+      # replaces once at startup, the panel's economy lookup it repeats, the
+      # inhabitant/tool reads, the three pile reads with their economy calls and `ret 8`.
+      (0xc59214,4),(0x143d3b,0x48),(0x143dc2,0x55),(0x143e81,12),(0x143eb8,14),
+      (0x143ee8,12),(0x143f1f,14),(0x143f4f,12),(0x143f86,14),(0x1440eb,3)]
 def generate(executable,output):generate_regions(executable,output,PINS,'dtconstruction')

@@ -111,6 +111,33 @@ inline int revealCircle(uint8_t*land,int size,int cx,int cy,int radius){
  for(int y=cy-radius;y<=cy+radius;y++){if(y<0||y>=size)continue;for(int x=cx-radius;x<=cx+radius;x++){if(x<0||x>=size)continue;int dx=x-cx,dy=y-cy;if(dx*dx+dy*dy>radius*radius)continue;uint8_t&fog=land[4*(y*size+x)+3];if(fog&0x3f){fog&=0xc0;changed++;}}}
  return changed;
 }
+// Dark-land sight (every 5 ticks): Dark cells (land byte 2 bit 0x40) show
+// fully visible (land byte 3 bits 3-5 current, 0-2 previous fog level; 0 is
+// visible, 3 explored, 7 black). The native fog merge (RVA 0x1AE3F0) rewrites
+// land byte 3 only for 8-cell groups whose fog byte (fog manager +0xC) changed
+// within the last three cycles: bits 6-7 count stable cycles and a group at
+// 0xC0 everywhere is skipped. Unseen cells are stable, so a cell that stops
+// being Dark (greened by a computer) kept the plugin's visible level forever.
+// Clearing its counter lets the next merge apply the native rule (back to the
+// explored level unless a unit sees it). shown marks cells this pass revealed;
+// filled with 1 it re-checks every non-Dark cell once (new map, load).
+struct SightPass{uint32_t revealed=0,returned=0;};
+inline SightPass darkSight(uint8_t*land,uint8_t*fog,uint8_t*shown,uint32_t cells){
+ SightPass r;if(!land||!shown)return r;
+ for(uint32_t i=0;i<cells;i++){if(land[4*i+2]&0x40){land[4*i+3]&=0xc0;shown[i]=1;r.revealed++;}else if(shown[i]&&fog){shown[i]=0;fog[i]&=0x3f;r.returned++;}}
+ return r;
+}
+// r42: whole-map reveal (Alt+9, toggle). Every tick the pending fog bits 3-5 of every fog byte (fog manager +0xC) are
+// cleared: the native band pass only lowers pending, and the merge (RVA 0x1AE3F0) shows level min(pending, max(old, 3))
+// = 0 on every cell and resets pending to the base, which the next tick clears again. The base bits 0-2 (the saved
+// explored state) and the counters are untouched, so a save made while revealed stays honest, and switching off lets
+// the merge fog the map again within a cycle (never-seen cells then show explored, not black, until reloaded).
+inline uint32_t revealPending(uint8_t*fog,uint32_t cells){if(!fog)return 0;uint32_t n=0;for(uint32_t i=0;i<cells;i++)if(fog[i]&0x38){fog[i]&=0xc7;n++;}return n;}
+// A key press edge: true once when down goes from false to true.
+inline bool pressed(bool down,bool&was){bool edge=down&&!was;was=down;return edge;}
+// r39: the exit tile of the native unload (RVA 0x16B990): record k of the six exit offsets (RVA 0xD69988) with
+// k = (signed aircraft byte +0x4E + 3) % 6 in C semantics (idiv: a negative remainder means no record, -1).
+inline int unloadExit(int counter){int k=((int)(signed char)counter+3)%6;return k>=0&&k<6?k:-1;}
 // Manacopter health. CManakopter ctor (RVA 0x16AF34..0x16AF74): ecx=0xFA; if the
 // int setting DTManakopterHitpoints (RVA 0xDCDB24, static default 0xFA written at
 // RVA 0x24571) is signed-below 0x100 it is used instead; BYTE +0x21 = cl. Healing

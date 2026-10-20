@@ -4,7 +4,7 @@
   "source": "C:\\Projects\\thesettlers4\\Map\\Campaign\\AO_trojan10.map",
   "source_sha256": "05f34cbb22aad2e8e390cf9f3d38dcd13e3513d69ccfa6f54c67450fc0b7b122",
   "output": "C:\\Projects\\thesettlers4-dark-tribe\\work\\generated\\Map\\User\\DarkTribe_IronKingdom.map",
-  "output_sha256": "a3648d815064a1ce68a7e38ae82c9426e2ad71a9476814c30f38f9188d506ed0",
+  "output_sha256": "b129169010f010bb4fe226b4a2d0927b10fc406e756c46d4bada453ce60e8ba9",
   "changedChunks": [
     2,
     1,
@@ -70,7 +70,7 @@
     ]
   ],
   "relocatedVikingUnits": 1,
-  "vikingGoods": 26,
+  "vikingGoods": 27,
   "sourceVikingGoods": 16,
   "removedTrojanGoods": 24,
   "barracks": {
@@ -170,6 +170,12 @@
       "amount": 8,
       "x": 530,
       "y": 469
+    },
+    {
+      "good": 18,
+      "amount": 2,
+      "x": 529,
+      "y": 471
     }
   ],
   "extraCarriers": 0,

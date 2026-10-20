@@ -34,8 +34,11 @@ const GARDENERS=8;
 const BARRACKS_NEAR=[441,358];
 const SUPPLY=[GOOD.SWORD,GOOD.SWORD,GOOD.BOW,GOOD.BATTLEAXE,GOOD.SHOVEL,GOOD.SHOVEL];
 // Toolsmith start buffer (r29): the kingdom's own TOOLSMITH (source record, unchanged) gets IRONBAR x16 and COAL x16
-// beside its entrance, so the plugin's shovel orders are made before the iron chain delivers. The kingdom has 2
-// SMITHs and 15 hammers, so no hammer pile.
+// beside its entrance, so the plugin's shovel orders are made before the iron chain delivers. r40: HAMMER x2 as well,
+// like the other maps: the kingdom starts with 2 SMITHs and 15 hammers, but in the field (pid 8520) the toolsmith lost
+// its smith around tick 22,500 and no replacement came for the rest of the game (the AI's "waiting for its smith"
+// task cleared the shovel order 17,519 times), because a new smith needs a carrier plus a hammer and the toolsmith is
+// the only hammer maker.
 const source=path.join(game,'Map/Campaign/AO_trojan10.map');
 const map=readMap(source),changes=new Map();
 assert(crypto.createHash('sha256').update(map.raw).digest('hex')===SOURCE_SHA256,'Unexpected source campaign map');
@@ -130,7 +133,7 @@ const toolsmiths=buildings.filter(b=>b[5]===2&&b[4]===TOOLSMITH);assert(toolsmit
 const toolsmith={x:toolsmiths[0].readUInt16LE(0),y:toolsmiths[0].readUInt16LE(2)};
 toolsmith.entrance=[toolsmith.x+masks._vikingDoors[TOOLSMITH][0],toolsmith.y+masks._vikingDoors[TOOLSMITH][1]];
 const toolInputs=placeToolsmithPiles({N,land,objects,owner:2,byte7:pileByte7(Buffer.concat(goods)),blocked:footprintCells(N,Buffer.concat(buildings),maskOf,1),
-  units:recordCells(N,allUnits,6),piles:pileList(Buffer.concat(goods)),seen:reachable(N,land,objects,2,vikingStart)},toolsmith.entrance,false);
+  units:recordCells(N,allUnits,6),piles:pileList(Buffer.concat(goods)),seen:reachable(N,land,objects,2,vikingStart)},toolsmith.entrance);
 goods.push(...toolInputs);
 // Clean start (r31): no Dark Mushroom Farm inside the fire field of a Dark Temple/Fortress (citadel-fire.cjs, FarmLock 33).
 // Removed last, so every placement above sees the source layout; the record goes and the flags the editor baked under

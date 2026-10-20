@@ -1,4 +1,4 @@
-"""Private local signatures for the computer offence against the Dark Tribe (rounds r27..r30)."""
+"""Private local signatures for the computer offence against the Dark Tribe (rounds r27..r33)."""
 from placement_pins import generate as generate_regions
 # Whole-instruction code ranges and relocated data words the plugin relies on
 # (research/AI_OFFENCE_0215.md; tools/inspect-offence.py checks each one).
@@ -61,6 +61,14 @@ PINS=[# Mod squad lifecycle: factory 0x45020 (+ 0x45470 guard), Command 0x46880
       # (0x16D5D0(0x1F)), the 255-damage event-2 post, CDarkTempleRole slot 3 (the tick), the gardener search's
       # reservation write (+0x40/+0x44) and its job 0xAF / 0xAE pushes, and the spiral count words for R = 16..24.
       (0x1458c0,0x99),(0x145a00,0x21),(0x145a71,0x2b),(0x145685,0x18),(0x145b3a,0x1d),(0xc59290,4),
-      (0x17a0e1,0x3b),(0x17a12a,0x17),(0x17a175,0xe),(0xd7cf7a,0x22)]
-DATA_PINS={0xc2a91c,0xc2a950,0xc2a8a4,0xc2aa0c,0xc2b218,0x469c8,0xbf07c0,0xc5b51c,0xd64214,0xc59104,0xc59290,0xd7cf7a}
+      (0x17a0e1,0x3b),(0x17a12a,0x17),(0x17a175,0xe),(0xd7cf7a,0x22),
+      # r33 escorted gardeners (WATCH): the group order copies the mode into the event unchanged (0x16A9E3), the gardener's
+      # order handler tests event +0xC & 4 (pinned above at 0x179B87) and pushes job 0xB0 without touching the work centre,
+      # else job 0xAE with the work centre; both store the destination at role +0x18 (0x179BC5); the job id table entry
+      # 0xB0 = JOB_GARDENER_FORCE_WALK (GO_TO_POS, WAIT in GameData/jobInfo.xml).
+      (0x16a9e3,0x15),(0x179bab,0x1d),(0xc049d0,4),
+      # r33 defence: the native intruder test 0x1B17E0 (owner of the cell == player; re-implemented in the bridge) and
+      # CAIAgentIntruderCombat's intruder type table 0xBF0438 (46, 48, 49, 47, 50, 45: no Dark type).
+      (0x1b1808,0x15),(0xbf0438,0x18)]
+DATA_PINS={0xc2a91c,0xc2a950,0xc2a8a4,0xc2aa0c,0xc2b218,0x469c8,0xbf07c0,0xc5b51c,0xd64214,0xc59104,0xc59290,0xd7cf7a,0xc049d0,0xbf0438}
 def generate(executable,output):generate_regions(executable,output,PINS,'dtoffence')

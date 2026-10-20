@@ -1,4 +1,4 @@
-"""File-only checks for the computer offence against the Dark Tribe (rounds r27..r32; no game launched)."""
+"""File-only checks for the computer offence against the Dark Tribe (rounds r27..r33; no game launched)."""
 import json,struct,sys
 from pathlib import Path
 from game_build import verify_executable
@@ -150,6 +150,17 @@ TOOLS=[ # r29: shovels for the gardeners at the computer's own toolsmith.
     # Role kind 4 = CProductionBuildingRole (slot 28 returns 4).
     (0x13ada0,'mov eax, 4'),(0x13ada5,'ret'),
 ]
+WATCH=[ # r33: escorted gardeners move with WATCH. CGroupMgr 0x16A800 builds the event {0x11, 0xD, mode, slot, click} per unit
+    # and copies the mode unchanged; the gardener handler 0x179A80 (case 0x11, command 0xD) pushes job 0xB0 for WATCH
+    # without writing the work centre, job 0xAE with the work centre +0x38/+0x3C for FORWARD; both store the walk
+    # destination y<<16|x at role +0x18.
+    (0x16a9ad,'mov dword ptr [ebp - 0x1c0], 0x11'),(0x16a9ca,'mov dword ptr [ebp - 0x1bc], 0xd'),(0x16a9e3,'mov eax, dword ptr [ebp + 0x18]'),(0x16a9e6,'mov dword ptr [ebp - 0x1b8], eax'),
+    (0x179b87,'mov ecx, dword ptr [esi + 0x10]'),(0x179b97,'je 0x579ba0'),(0x179b99,'mov edx, 0xb0'),(0x179b9e,'jmp 0x579bb9'),(0x179ba3,'mov edx, 0xae'),
+    (0x179bbc,'shl ecx, 0x10'),(0x179bbf,'add ecx, dword ptr [ebp + 0xc]'),(0x179bc5,'mov dword ptr [ebx + 0x18], ecx'),
+]
+DEFEND=[ # r33: the native intruder test 0x1B17E0 (ecx = player, edx = x, [ebp+8] = y): 0 when the cell's owner (pool dword & 0xF) is the player.
+    (0x1b17f9,'mov edi, dword ptr [0x12f1a18]'),(0x1b180a,'movzx eax, word ptr [edi + eax*2]'),(0x1b1811,'mov eax, dword ptr [eax*4 + 0x12f1a20]'),(0x1b1818,'and eax, 0xf'),(0x1b181b,'cmp eax, ebx'),
+]
 SPEED=[ # r32: the settler speed byte. The SettlerValues.xml loader stores atoi(<speed>) (CRT 0x999BBA, base 10) at record +1
     # (0x1146930 + 36*(race*0x46 + type)); every <speed> element of the shipped file is empty, so soldiers and gardeners share
     # one walking speed (the convoy does not rely on it: the soaks also run gardeners slower).
@@ -162,7 +173,7 @@ def run():
     def at(rva):
         i=next(cs.disasm(pe.get_data(rva,16),base+rva),None)
         return (i.mnemonic+' '+i.op_str).strip() if i else ''
-    for rva,text in WHY+USED+TOOLS+FIRE+SPEED:assert at(rva)==text,(hex(rva),at(rva),text)
+    for rva,text in WHY+USED+TOOLS+FIRE+SPEED+WATCH+DEFEND:assert at(rva)==text,(hex(rva),at(rva),text)
     import re
     values=(executable.parent/'GameData/SettlerValues.xml').read_text(encoding='latin-1')
     blocks={}  # per settler entry: its <speed> texts (SETTLER_BOWMAN_02 has no <speed> in any race; its byte then comes from the loader's fallback node, not verified)
@@ -244,6 +255,8 @@ def run():
     source=(ROOT/'native/dark-tribe.cpp').read_text(encoding='utf-8')
     bridge=(ROOT/'native/offence-native.hpp').read_text(encoding='utf-8')
     model=(ROOT/'native/offence-model.hpp').read_text(encoding='utf-8')
+    # r43: the carrier reserve floor grows with the kingdom; the hook only ever raises the AI's own value.
+    assert 'constexpr int ReserveBase=15,ReservePer=2,ReserveMax=120;' in model and 'inline int carrierKeep(int buildings){return std::min(ReserveMax,ReserveBase+std::max(0,buildings)/ReservePer);}' in model and 'inline int carrierReserve(int native,int buildings){return std::max(native,carrierKeep(buildings));}' in model
     for forbidden in ['lua','AcquireSRWLock','SendWarriors','api->','MagicIncreaseMana','SettlersAdd','0xe3a80']:assert forbidden not in bridge,forbidden
     # Destruction is the gardeners' greening; the plugin's own destroy is only the all-green fallback.
     assert 'if(!dark){' in model and 'ops.destroy(c,c.target)' in model and 'GardenerType' in bridge and 'image+0xd5100' in bridge
@@ -261,6 +274,15 @@ def run():
         if not nxt:break
         typ=nxt
     assert tbl.get(0x32)==7 and 1 not in tbl,tbl.get(0x32)
+    # r33: the Dark units the defence goes for: Dark Gardener 52 group 7, Warrior 29 group 2, Thrower 32 group 3, Shaman 54
+    # group 4 (computer soldiers attack them); the Mushroom Farmer 53 is group 1 (never a target).
+    assert [tbl.get(t) for t in (0x34,0x1d,0x20,0x36,0x35)]==[7,2,3,4,1],[tbl.get(t) for t in (0x34,0x1d,0x20,0x36,0x35)]
+    # CAIAgentIntruderCombat's intruder types (0xBF0438): Saboteur, Thief, Geologist, Pioneer, Gardener, Priest; no Dark type.
+    assert [dword(0xbf0438+4*i) for i in range(6)]==[46,48,49,47,50,45]
+    # Job 0xB0 is JOB_GARDENER_FORCE_WALK (id/name pairs at 0xC049C0), in jobInfo.xml a walk (GO_TO_POS) then WAIT.
+    assert dword(0xc049d0)==0xb0 and pe.get_data(dword(0xc049d4)-base,24)==b'JOB_GARDENER_FORCE_WALK\0'
+    jobs=(executable.parent/'GameData/jobInfo.xml').read_text(encoding='latin-1');walk=jobs.split('<job id="JOB_GARDENER_FORCE_WALK">')[1].split('</job>')[0]
+    assert re.findall(r'<task>([^<]*)</task>',walk)==['CEntityTask::GO_TO_POS','CEntityTask::WAIT'],re.findall(r'<task>([^<]*)</task>',walk)
     for forbidden in ['windows.h','image+','api->','VirtualQuery']:assert forbidden not in model,forbidden
     assert 'nativeOffence.initialize(image)' in source and 'return 13;' in source and 'offenceTick(t)' in source
     assert 'bits&(1u<<p)' in bridge and '0xe66e28+DarkPlayer*0x58+0x38' in bridge
@@ -269,7 +291,9 @@ def run():
     # Reservoir slots used by AddMember/dissolve; factory state 6 -> squad type 2.
     assert dword(0xc2a950+0x14)==base+0x44ab0 and dword(0xc2a950+0x18)==base+0x44ba0 and dword(0xbf07a8+6*4)==2
     tick=source[source.index('struct OffenceOps {'):source.index('static HRESULT __stdcall frame(')]
-    assert 'internalSend=true' in tick and 'SendWarriors(' in tick and 'S4_MOVEMENT_WATCH' not in tick and 'ids.data()+at' in tick
+    assert 'internalSend=true' in tick and 'SendWarriors(' in tick and 'ids.data()+at' in tick
+    # r33: WATCH only for one parked gardener per order; soldiers and every gardener release stay FORWARD.
+    assert tick.count('S4_MOVEMENT_WATCH')==1 and 'order(c,ids,x,y,"gardener parked",S4_MOVEMENT_WATCH);' in tick and 'S4_MOVEMENT_ENUM mode=S4_MOVEMENT_FORWARD' in tick and 'moveGardeners' not in tick
     # Plugin stop hands every mod squad back; dying buildings never count as standing.
     assert source.count('offenceStopLocked();')>=2 and 'nativeOffence.releaseAll()' in source and 'offencePinned=true;' in source
     assert 'standing(view.selected)' in source and '!standing(id)||isSite(id)' in source and '!standing((uint16_t)id)||isSite((uint16_t)id)' in source
@@ -280,7 +304,7 @@ def run():
     assert 'read(eco+0x354,list)' in bridge and 'read(eco+0x348,counts)' in bridge and 'listEnd-list>64' in bridge and 'i<countsEnd-counts' in bridge
     assert 'inline int shovelOrder(' in model and 'ordered>=ShovelContinuous?"continuous order"' in model and 'toolsmiths<=0?"no toolsmith"' in model and 'free>ShovelReserve?"spare shovels"' in model
     assert 'offenceTools(p,t,supply,wanted);' in source and 'nativeOffence.orderShovels(tools,supply.eco,amount)' in source and 'OFFENCE_TOOLS player=%u' in source and 'toolsmiths=%d shovelOrder=%d ironbars=%d coal=%d' in source
-    assert '; toolsmith shovel orders r29; citadel fire keep-off and farm blockade r30; clean start maps r31; scaled styles and protected convoy r32")' in source
+    assert '; toolsmith shovel orders r29; citadel fire keep-off and farm blockade r30; clean start maps r31; scaled styles and protected convoy r32; computer defence and reclaim priority r33; site selection crash fix r34; reclaimed land fog and fast army marches r35; fire pull and route diagnostics r36; relentless and smart attacks r37; walked progress and steady sieges r38; Dark Gardeners leave the Manacopter r39; Iron Kingdom toolsmith hammers r40; no Manacopter healing r41; map reveal toggle r42; scaling carrier reserve r43")' in source
     # r30: one fire geometry (citadel-fire.hpp) for the director and the farm blockade; the fire is on from the native
     # ready-farm counter, the listed farms or a Farm site; every keep is Euclidean; the guard runs every director step.
     fire=(ROOT/'native/citadel-fire.hpp').read_text(encoding='utf-8')
@@ -297,7 +321,7 @@ def run():
     assert 'send(c,t,ops,m,s.homeX,s.homeY,true)' not in model and 'GuardResend)){c.fireAt' not in model
     assert 'image+0x10ef7ac+DarkPlayer*0x298' in bridge and '(job==0xae||job==0xaf)?rx:-1' in bridge and 'g.reservedX=job==0xaf?rx:-1' in bridge and '!accept(px,py)' in bridge and '(flags(x,y)&0x05)==0x04' in bridge
     assert 'static void offenceFire(OffenceOps&ops,uint32_t t){' in source and 'offenceFire(ops,t);' in source and 'OFFENCE_FIRE_STATE ready=%d listed=%d farmSites=%d on=%u centres=' in source and 'OFFENCE_FIRE_NATIVE player=%u soldiers=%d' in source and 'OFFENCE_FIRE player=%u' in source
-    assert 'int readyFarms(){return nativeOffence.readyFarms();}' in source and 's.kind=state.construction[i].kind;' in source and '!dtoffence::inFire(px,py,f)' in source and '"CALL","FIRE","CONVOY"}' in source
+    assert 'int readyFarms(){return nativeOffence.readyFarms();}' in source and 's.kind=state.construction[i].kind;' in source and '!dtoffence::inFire(px,py,f)' in source and '"CALL","FIRE","CONVOY","DEFEND"}' in source
     assert 'offenceFireNote[0]=0;' in source and 'random' not in fire
     # r29 review: the AI's clears are watched every tick; the watch is transient and puts back only the plugin's part.
     assert 'struct ShovelWatch {int owed=0,seen=-1;};' in model and 'if(now+1<w.seen)add=std::max(0,std::min(w.owed,w.seen)-now);' in model and 'inline void shovelNoted(' in model and 'inline int shovelTarget(' in model
@@ -306,21 +330,90 @@ def run():
     assert 'offenceShovelWatch' not in (ROOT/'native/economy.hpp').read_text() and 'for(auto&w:offenceShovelWatch)w=dtoffence::ShovelWatch{};' in source
     assert 'back==eco&&read(eco+0x12,owner)&&owner==p' in bridge
     # r32: every style grows with the army (today's sizes the floor), gardeners with the soldiers a style takes, at most
-    # gardenersWanted(free soldiers); the army marches as one convoy with its gardeners (one id per order), holds while
-    # they lag, leaves stragglers after ConvoyStall, screens the target before they work, takes top-ups only near it,
-    # walks to a hunt's gardeners first (rally) and goes home as a convoy; recruitment and shovel orders follow the scaled number.
+    # gardenersWanted(free soldiers); the army marches as one convoy with its gardeners (one id per order), screens the
+    # target before they work, takes top-ups only near it and goes home as a convoy; recruitment and shovel orders follow
+    # the scaled number. r35: no hold, walk-back or rally for the gardeners (below).
     for text in ['inline int raidSize(int army){return std::max(0,std::min(army,std::max(RaidMax,army/3)));}','inline int huntSize(int army){return std::max(0,std::min(army,std::max(HuntMax,army/2)));}',
                  'inline int escortSize(int army){return std::max(0,std::min(army,std::max(SweepEscort,army/4)));}','inline int gardenersWanted(int soldiers){return std::min(MaxGardeners,GardenersWanted+std::max(0,soldiers-WantedFrom)/WantedPer);}',
                  'inline int gardenersFor(Style s,int soldiers=0){return std::min(MaxGardeners,gardenerBase(s)+std::max(0,soldiers)/GardenerPer);}','r.take=raidSize(army);','h.take=huntSize(army);','w.take=escortSize(army);','a.want=wantOf(Style::Assault,army);',
-                 'template<class Ops> bool convoy(','template<class Ops,class Take> int gather(','ops.sendGardener(c,g,px,py);c.gdx[i]=px;','if(!legClear(g.x,g.y,px,py,f,GardenerKeep))continue;','"waiting for gardeners"','"gardeners left behind"','"rally to the gardeners"',
-                 'bool arrived=there*10>=(int)m.size()*7&&together(c,ops,m);','home*10>=(int)m.size()*8&&together(c,ops,m)','held=c.lastOrder&&holders(c,m)>=needed(m)','distance(g.x,g.y,a.x,a.y)<=TopUpReach&&legClear(','template<class Free> bool screenPoint(',
-                 'template<class Ops> void rearGuard(','if(f.on&&closer(a.x,a.y,f,soldierKeep(n))){','!closer(cx,cy,f,soldierKeep(n))&&','int want=c.escort?0:c.want;','alive+pending>=wanted?','int missing=wanted-alive-std::max(0,pending)']:assert text in model,text
-    assert model.count('ops.moveGardeners(')==1 and model.count('distance(g.x,g.y,a.x,a.y)<=TopUpReach')==2 and 'GardenersWanted-alive' not in model
+                 'template<class Ops> bool convoy(','template<class Ops,class Take> int gather(','ops.park(c,g,px,py);c.gdx[i]=px;','if(!legClear(g.x,g.y,px,py,f,GardenerKeep))continue;','"waiting for gardeners"',
+                 'bool arrived=there*10>=(int)m.size()*7&&(via||gathered(c,t,ops,m));','home*10>=(int)m.size()*8&&together(c,ops,m)','held=c.lastOrder&&holders(c,m)>=needed(m)','distance(g.x,g.y,a.x,a.y)<=TopUpReach&&legClear(','template<class Free> bool screenPoint(',
+                 'template<class Ops> void rearGuard(','bool hot=f.on&&closer(a.x,a.y,f,soldierKeep(n));','if((hot||!closer(cx,cy,f,soldierKeep(n)))&&','int want=c.escort?0:c.want;','alive+pending>=wanted?','int missing=wanted-alive-std::max(0,pending)']:assert text in model,text
+    assert model.count('ops.moveGardeners(')==0 and model.count('distance(g.x,g.y,a.x,a.y)<=TopUpReach')==2 and 'GardenersWanted-alive' not in model
+    # r33 convoy (field pid 13612: gap 15..18 against 14, wait 0, stragglers sent home alone, way-home gaps 57..78): gardeners
+    # follow parked (WATCH, park) from their real state, the gap is measured to the nearest soldier of the army body, a campaign
+    # musters its gardeners within LaunchReach of home and takes others only within PickReach of the army.
+    # r35 (user: the army must move fast; field pid 22316: holds of 2,000..5,000 ticks, a 221-soldier army stepping ConvoyLead
+    # tiles hardly moved): one order per leg to its end, the gardeners follow to that leg end (or the latest clear route point),
+    # only the staging cell waits for them (StageWait); the hold, the walk-back, the rally and the assault-leg convoy are gone.
+    for text in ['inline bool settled(const Gardener&g,int x,int y){return g.escorted&&','int px=x+2*ox+1,py=y+2*oy;','if(c.gsent[i]&&t-c.gsent[i]<ConvoyResend)continue;','inline Army body(const std::vector<Soldier>&m,std::vector<Soldier>*core=nullptr){',
+                 'c.gap=spanOf(gs,core);','c.waited=std::max<uint32_t>(1,t-c.waitSince);','template<class Ops> bool gathered(','bool go=c.waited>=StageWait;','"assault before the gardeners"',
+                 'template<class Ops> void follow(','if(!f.on||legClear(gs[i].x,gs[i].y,px[q],py[q],f,GardenerKeep))pick[i]=q;','if(!gs.empty())follow(c,t,ops,gs,f,ox,oy,dx,dy);','StageWait=300;',
+                 'template<class Ops> void strays(','return distance(g.x,g.y,s.homeX,s.homeY)<=LaunchReach;','return distance(g.x,g.y,a.x,a.y)<=PickReach;','template<class Ops> void release(Campaign&c,Ops&ops,const Strength&s){',
+                 'distance(a.x,a.y,c.target.doorX,c.target.doorY)<=AssaultDistance&&legOk&&together(c,ops,m)','if(!ops.stand(c,cx,cy,1)){','if(c.split)sendSplit(c,t,ops,m,x,y,x2,y2);else send(c,t,ops,m,x,y,false);']:assert text in model,text
+    for text in ['ConvoyStall','RallyLimit','ConvoyHysteresis','assaultLeg','c.rally','rallies','"army walks back to the gardeners"','"gardeners do not follow"','"rally to the gardeners"','rear-ConvoyLead']:assert text not in model,text
+    # r37 (user: the computers attack rarely and pick far targets): targets by the walking path from the chooser's position
+    # (one breadth-first search per decision/retarget, walkAll), a cluster bonus, no chance gate for assault-sized armies,
+    # short rests, leg and target budgets by distance with a no-progress rule, a failed target replaced from where the army
+    # stands, land-only defences behind attacks and escort-sized, Dark fighters alone recall an attack, far gardeners called
+    # home and replaced (recruitment counts gardeners within LaunchReach of home).
+    for text in ['constexpr uint32_t FirstMin=2*DelayUnit,FirstMax=4*DelayUnit,CheckEvery=128,','CooldownMin=150,CooldownSpread=300;','RaidChain=5;',
+                 'constexpr uint32_t TicksPerHex=25,NoProgress=1500,TargetsNote=3000;','inline uint32_t legBudget(int hex)','inline uint32_t targetBudget(int hex)','template<class Ops> bool stalled(Campaign&c,uint32_t t,Ops&ops,const std::vector<Soldier>&m,int sx,int sy,int gx,int gy){',
+                 'bool late=stalled(c,t,ops,m,lsx,lsy,lgx,lgy)','if(t-c.targetSince>targetBudget(c.targetHex)){failed(c,c.target.uid,t);','c.reason="target not reached";ops.report(Event::Avoid,c);retarget(c,t,ops,m);return;}',
+                 'detour=0,path=0;bool reachable=false;};','return b.reachable&&b.path>=0&&!(c&&avoided(*c,b.uid,t));','long score=(b.path>0?(long)b.path:distance(fromX,fromY,b.doorX,b.doorY)+std::max(0,b.detour))',
+                 'constexpr int ClusterRadius=40,ClusterBonus=8,ClusterMax=24;','ops.paths(c,s.homeX,s.homeY,all);','ops.paths(c,a.x,a.y,all);','if(!allied&&army<AssaultMin&&c.random.bits16()>=c.chance){decline(c,t,ops,"chance");return;}',
+                 'constexpr uint32_t LandDefendGap=12000,LandDefendTime=3000;','template<class Ops> bool attackable(','defendNote(c,t,ops,th,"deferred: attacks first");return false;','int take=landOnly?std::max(1,std::min(army,escortSize(army))):defendSize(free,army,th);',
+                 'if(!th.fighters)return false; /* r37','(c.landOnly?LandDefendTime:DefendTime)','CallHome=4;constexpr uint32_t CallHomeEvery=600;','note.reason="gardeners called home";ops.report(Event::Reclaim,note);',
+                 'h.weight=any>=0?1:2+','w.weight=any<0?5:1;']:assert text in model,text
+    for gone in ['bool late=t-c.since>MarchTimeout','startReturn(c,t,ops,m,"target not reached")','LongAvoid=4*LostAvoid']:assert gone not in model,gone
+    for text in ['void walkAll(int fx,int fy,int wanted,int limit,std::vector<Target>&out){','if(goalSeen[at]==goalStamp){Target&t=out[goalOf[at]];if(t.path<0){t.path=std::max(1,steps);found++;}}']:assert text in bridge,text
+    for text in ['void paths(const dtoffence::Campaign&,int x,int y,std::vector<dtoffence::Target>&all){','nativeOffence.walkAll(x,y,region,limit,all);','for(auto&t:all)if(t.path<0)t.reachable=false;}',
+                 'supply.alive=std::max(close,supply.alive-wanted);}']:assert text in source,text
+    # r38 (field pid 3832, First Dawn: every march failed "target not reached" because the walk loops around the lake and the
+    # hex distance grew; a 148-soldier siege was given up after three single stragglers crossed the fire line): march progress
+    # and budgets by the walked steps (bridge walkSteps: a field per goal), lure episodes only for LureMin+ soldiers at once,
+    # detourLimit 4 x hex + 100, OFFENCE_TARGETS when nothing can be attacked.
+    for text in ['int len=ops.walkSteps(c,sx,sy,gx,gy);uint32_t budget=legBudget(std::max(distance(sx,sy,gx,gy),len));','int w=ops.walkSteps(c,b.x,b.y,gx,gy);int d=w>0?w:distance(b.x,b.y,gx,gy);',
+                 'constexpr int LureMin=3;','if(h.count>=std::max(LureMin,(int)m.size()/10)&&sinceFire>=GuardResend){','inline int detourLimit(int hex){return 4*std::max(0,hex)+5*DetourSlack;}',
+                 'c.targetHex=c.target.id?std::max(distance(fromX,fromY,c.target.doorX,c.target.doorY),c.target.path):0;','ops.listTargets(c,all,f,t);']:assert text in model,text
+    for text in ['int walkSteps(int fx,int fy,int tx,int ty,int wanted){','static constexpr int WalkFields=4;','f->steps[(size_t)y*n+x]=0;cur.push_back(y*n+x);']:assert text in bridge,text
+    for text in ['int walkSteps(const dtoffence::Campaign&,int fx,int fy,int tx,int ty){','OFFENCE_TARGETS player=%u sector=%u fire=%d buildings=%u']:assert text in source,text
+    # r36 diagnostics (log only): the fire guard reports every unit it turns back (soldiers before replanAt changes the leg,
+    # held gardeners with their bench flag, reclaim's free gardeners); the bridge logs them with the ordered leg, and logs
+    # every plan of a marching or homeward route and every replan that gave the same route.
+    for text in ['struct Pulled {uint16_t id=0;int x=0,y=0,aimX=-1,aimY=-1,cellX=-1,cellY=-1','ops.pulled(c,f,m,who,way?ex:-1,way?ey:-1);} /* r36: before replanAt changes the leg */',
+                 'if(!who.empty())ops.pulled(c,f,m,who,-1,-1);','if(!freed.empty()){std::vector<Soldier> none;ops.pulled(c,f,none,freed,-1,-1);}']:assert text in model,text
+    assert model.index('ops.pulled(c,f,m,who,way?ex:-1,way?ey:-1);')<model.index('if(c.phase==Phase::March||c.phase==Phase::Return)c.replanAt=t+GuardResend;')
+    for text in ['void pulled(const dtoffence::Campaign&c,const dtoffence::Fire&f,const std::vector<dtoffence::Soldier>&m,const std::vector<dtoffence::Pulled>&who,int ex,int ey){',
+                 'OFFENCE_FIRE_PULL player=%u sector=%u phase=%d style=%s kind=%s leg=via %d/%d from=%d,%d to=%d,%d prev=%d,%d legFire=%.1f legOff=%d legBuilt=%d age=%u',
+                 'static void offenceRouteNote(const dtoffence::Campaign&c,uint32_t t,OffenceOps&ops){','dtoffence::step(c,t,ops);offenceRouteNote(c,t,ops);}',
+                 'OFFENCE_ROUTE player=%u sector=%u phase=%d style=%s from=%d,%d end=%d,%d army=%d keep=%d fire=%d vias=%s legs=%s reason=%s',
+                 'replanned after the fire guard, same route','for(auto&row:offenceRoutes)for(auto&r:row)r=RouteSeen{};']:assert text in source,text
+    assert 'sendOut(c,ops,gs[i],f,hs.homeX,hs.homeY)' not in model and 'gardeners left behind' not in model and "g.work!=Work::Working&&(distance(g.x,g.y,a.x,a.y)>EscortRadius" not in model
+    assert 'g.escorted=job==0xb0;if(g.escorted){uint32_t d=value<uint32_t>(role+0x18);' in bridge
+    # r33 defence and reclaim priority; unreachable targets; shovel churn.
+    for text in ['struct Intrusion {int own=0,rise=0;','template<class Ops> Threat assess(','template<class Ops> bool defend(Campaign&c,uint32_t t,Ops&ops){','template<class Ops> bool answer(','template<class Ops> void hold(Campaign&c,uint32_t t,Ops&ops,const std::vector<Soldier>&m){',
+                 'if(cfg.ok&&defend(c,t,ops))return;','if(answer(c,t,ops,m))return;','if(c.style==Style::Defend){hold(c,t,ops,m);return;}','!closer(p.first,p.second,f,HuntKeep)','int hk=std::max(soldierKeep(n),HuntKeep)'.replace('int hk','hk'),
+                 'constexpr int OwnRadius=4096,','"none sent: no Dark cell in reach"','"none sent: no idle free gardener"','"parked gardener sent home"','DefendPerPass:ReclaimPerPass',
+                 'inline bool tooLong(int path,int hex){return path<0||path>detourLimit(hex);}','std::max(0,b.detour)','inline void failed(Campaign&c,uint32_t uid,uint32_t t){','++c.ignoredOrders>=IgnoreLimit','"orders not executed"',
+                 'if(t-c.targetSince>targetBudget(c.targetHex)){failed(c,c.target.uid,t);','inline int shovelRestoreWhile(ShovelWatch&w,int now,int iron){']:assert text in model,text
+    assert 'inside(p,x,y))(type==52?in.gardeners:in.fighters).push_back({x,y});' in bridge and 'int walk(int fx,int fy,int tx,int ty,int wanted,int limit){' in bridge and 'if(path<0||(path>0&&tooLong(path,hex)))t.reachable=false;' in bridge and 'rise[p]=scanned?now-was:0;' in bridge
+    assert 'OFFENCE_DEFEND player=%u sector=%u phase=%d army=%u gardeners=%d units=%d fighters=%d own=%d rise=%d area=%d,%d reason=%s' in source and 'nativeOffence.intrusion(c.player,region,in);' in source and 'dtoffence::shovelRestoreWhile(watch,before,offenceIron[p])' in source and 'offenceIron[p]=nativeOffence.stock(supply.eco,20);' in source
+    assert 'nativeOffence.targets(region,out,homeX,homeY,now);' in source and source.count('ops.homeX=st.homeX;ops.homeY=st.homeY;ops.now=t;')==2
+    # r33 review: free gardeners never reclaim alone across the map, land-only defences need gardeners and adopt those near
+    # the army, hold() danger skips fighters in the fire field like assess(), 'serious' land needs a reclaimable cell, a
+    # parked citadel's surplus gardeners wait parked behind the screen, hold fallbacks only go to standable cells
+    # (r35: the convoy stop order is gone), an expired walking detour keeps its last path until refreshed.
+    for text in ['bool homeSide=distance(g.x,g.y,s.homeX,s.homeY)<=LaunchReach;','(homeSide&&ops.ownDark(c,s.homeX,s.homeY,LaunchReach,keep,dx,dy))','"declined: no gardeners"','if(!th.units&&!c.gardeners)return false;',
+                 'return reachOf(core,g.x,g.y)<=PickReach&&!inFire(g.x,g.y,f)&&','for(auto&p:in.fighters){if(closer(p.first,p.second,f,HuntKeep))continue;','th.serious=th.any&&((th.land&&(in.own>=SeriousCells||in.rise>=SeriousRise))',
+                 'inline int landGardeners(const Threat&th){return th.land?th.own/DefendPerGardener:0;}','surplus.push_back(i);','(closer(hx,hy,f,hk)||!ops.stand(c,hx,hy,1))','(!closer(hx,hy,f,hk)&&ops.stand(c,hx,hy,1))']:assert text in model,text
+    assert 'send(c,t,ops,m,a.x,a.y,home)' not in model and 'sendOut(c,ops,g,f,homeX,homeY)' not in model and 'ops.ownDark(c,g.x,g.y,OwnRadius,keep,dx,dy)' not in model
+    assert 'if(walkAt==now+1)return known?stale:0;' in bridge and 'if(!path)return known?stale:0;' in bridge
     assert 'OFFENCE_CONVOY player=%u sector=%u phase=%d style=%s target=%u kind=%u door=%d,%d army=%u gardeners=%d gap=%d limit=%d left=%d wait=%u at=%d,%d reason=%s' in source and 'chance=%u gap=%d wait=%u reason=%s' in source
     assert 'int wanted=dtoffence::gardenersWanted(soldiers);' in source and 'supply.carriers,&why,wanted)' in source and 'tools.toolsmiths,&why,wanted);' in source and 'supply.shovels,wanted);' in source
     tools=source[source.index('static void offenceTools('):source.index('static void offenceRecruit(')]
     assert 'dtoffence::shovelOrder(' in tools and 'supply.eco' in tools and '0xe66b10' not in tools.lower() and 'offenceShovelGuard' in tools
-    report=dict(version='0.2.15',round='r32',game_sha256=pin['sha256'],game_started=False,live_process_read=False,
+    report=dict(version='0.2.15',round='r33',game_sha256=pin['sha256'],game_started=False,live_process_read=False,
         native_targets='types 0x2E..0x30 only (0x4281D) and group nibble 0xC only for house kinds 10/15 (0x135D08): Dark buildings are never AI targets',
         native_damage_paths_for_dark_buildings='none (soldiers, war machines, axe warriors/saboteurs, spells); gardener greening and 0x136A80 only',
         mod_squad='0x45020(manager, 6) + Command(0) + AddMember from the sector reservoirs/guard squads; dissolve 0x3FA50 + slot 2',
@@ -328,12 +421,14 @@ def run():
         gardeners='authored at map start; native recruitment 0xD5100 (carrier + shovel) one at a time, keeping 2 shovels',
         shovels='r29: while gardeners are missing and free shovels are at the reserve, the home economy shovel order (byte eco+0x348 at the index of good 31 in eco+0x354) is topped up to at most 4 via 0xD6A90 (the 0x13A9 toolsmith handler), only with a ready toolsmith (type 0x15, CProductionBuildingRole) in that economy, never on a continuous 100 order; the toolsmith (0x14D008) makes nothing without an order; the AI never orders shovels for gardeners (0x249835 only for its diggers) and its building manager can clear or lower the order (0x249770 sends 10-2*diggers: 0 at its 5-digger steady state, negative above), so the plugin watches the byte every tick and puts back its own part after a drop of two or more (transient watch, before the net dispatch and the entity update)',
         citadel_fire='r30: CDarkTempleRole (Temple 50, Fortress 51; the Manacopter Hall has none) runs 0x1458C0 every 31 ticks per building: while the owner\'s ready-farm counter [0x10EF7AC + p*0x298] > 0 it kills (255 damage, 100% from 4 farms) hostile units with a selection group on walkable Dark cells (flags & 5 == 4) of the door\'s land sector within the Euclidean disc dx*dx - dx*dy + dy*dy <= R*R around position + (1,2), R = 16+2n or 24 (spiral 0xD69968, 2,083 cells for R = 24, up to 27 hex steps). The director keeps every computer unit outside FireLine 27 while the counter, the listed farms or a Farm site say the fire is on: soldier destinations soldierKeep(N) = 27 + formation spread, gardener cells 28, legs routed, farms within 33 and Halls within 44 never targeted, a guard every 10 ticks pulls units out (gardener aim cell role +0x40/+0x44 under job 0xAE/0xAF)',
-        timing='first attack after AttackDelay*840/3 within 3..8 minutes (native agent 0x2FAF0 uses AttackDelay*840), checks every 256..383 ticks at 50% +25% per failure, 600..1499 ticks rest after a campaign',
+        timing='r37: first attack after AttackDelay*840/3 within 2..4 minutes (native agent 0x2FAF0 uses AttackDelay*840), checks every 128..255 ticks, no chance gate for an army of AssaultMin+ (smaller: 50% +25% per failure), 150..449 ticks rest after a campaign, leg and target budgets by distance (TicksPerHex 25, NoProgress 1500), failed targets replaced from where the army stands; targets by the walking path from the chooser (walkAll) with a cluster bonus',
         styles='raid, assault, pincer, sweep, hunt, allied (plugin generator, never the game LCG 0xE66B10); r32: raid max(10, army/3), hunt max(16, army/2), sweep escort max(8, army/4), each at most the army, assault/pincer/allied the whole army; gardeners base (raid 4, hunt 2, sweep 10, allied 6, assault/pincer 8) + soldiers taken/15, at most gardenersWanted(free soldiers) = min(20, 12 + max(0, soldiers-40)/10)',
         convoy='r32: the army is ordered every 30 ticks to the point of its leg 10 tiles ahead of the convoy rear (army centre or gardeners centre), the gardeners one id per order to cells around the point 3 behind it; the army holds while a gardener is farther than 8 + formation spread from its centre and leaves stragglers after 600 ticks; legs end only with the convoy together; at the target the army screens towards the nearest Dark fighter (within 6 of the door) and the gardeners wait 4 behind it until the screen holds; top-ups only within 20 of the army; a hunt walks to its gardeners (rally) first; the way home is a convoy. SettlerValues.xml leaves every <speed> empty (atoi 0 at record +1, 0x183CE1): one walking speed for all settler types',
-        checked_instructions=len(WHY)+len(USED)+len(TOOLS)+len(FIRE),generated_signature_regions=len(PINS),relocation_data_copy_bases=['0x400000','0x360000','0x60000000'],
+        escort='r33: escorted gardeners move with WATCH (one id per order): the group order 0x16A800 copies the mode into the event (0x16A9E3), the gardener handler pushes job 0xB0 JOB_GARDENER_FORCE_WALK (GO_TO_POS, WAIT) without touching its work centre (0x179B90..0x179B9E) and stores the destination at role +0x18 (0x179BC5); every release is FORWARD (job 0xAE, the destination its work centre)',
+        defence='r33: CAIAgentIntruderCombat only treats types 46, 48, 49, 47, 50, 45 as intruders (0xBF0438); the plugin reads Dark Gardeners (type 52, group 7) and Dark Warriors/Throwers/Shamans (groups 2/3/4) standing in or within 4 of a computer territory (owner test of 0x1B17E0, re-implemented) and leads a defend campaign; Mushroom Farmers are group 1 (never attacked)',
+        checked_instructions=len(WHY)+len(USED)+len(TOOLS)+len(FIRE)+len(WATCH)+len(DEFEND),generated_signature_regions=len(PINS),relocation_data_copy_bases=['0x400000','0x360000','0x60000000'],
         gameplay_attack_verified=False,gameplay_greening_verified=False,gameplay_recruitment_verified=False,gameplay_toolsmith_orders_verified=False,dark_land_region_verified=False)
     (ROOT/'research/offence-native-checks.json').write_text(json.dumps(report,indent=2))
-    print('PASS: offence target filters, mod squad lifecycle, gardener orders/greening/recruitment, toolsmith shovel orders (r29), citadel fire keep-off (r30), scaled styles and convoy (r32), AI config/strength layout and relocation-aware pins; file/data-only checks')
+    print('PASS: offence target filters, mod squad lifecycle, gardener orders/greening/recruitment, toolsmith shovel orders (r29), citadel fire keep-off (r30), scaled styles and convoy (r32), parked convoy gardeners, defence and reclaim priority (r33), AI config/strength layout and relocation-aware pins; file/data-only checks')
 
 if __name__=='__main__':run()

@@ -29,6 +29,15 @@
 // towards the nearest Dark fighters at the target before the gardeners work,
 // top-ups come only from gardeners already near the army, a hunt's gardeners
 // join only when the army has walked to them, and the way home is a convoy too.
+// r33: escorted gardeners move with WATCH (job 0xB0 walks, then waits; its work
+// centre stays, so it never searches Dark land on the way), re-ordered from
+// their real state; the gap is measured to the nearest soldier of the army body;
+// a held army stops, waits and walks back to stragglers instead of dropping them.
+// Defence: Dark land or Dark units inside a computer's territory start a 'defend'
+// campaign (soldiers to the intrusion, gardeners reclaim own land behind them);
+// a serious intrusion recalls a running attack. Reclaim searches the whole own
+// territory; targets behind a long detour are unreachable; failed targets are
+// avoided longer each time.
 // No engine reads here: the engine side is an Ops object (dark-tribe.cpp /
 // offence-tests.cpp).
 #include <stdint.h>
@@ -42,13 +51,14 @@ constexpr uint16_t Farm=49,Temple=50,Fortress=51,Hall=80;
 constexpr uint8_t DarkPlayer=1;
 // AttackDelay counts in 840-tick units (one game minute, native agent 0x2FAF0).
 constexpr uint32_t DelayUnit=840;
-// Pressure: the first attack after a third of the AI's AttackDelay, kept
-// within 3..8 minutes; a check every 256..383 ticks succeeds with 50%, +25%
-// per failed check; a finished campaign rests 600..1,499 ticks, then the next
-// army forms from whatever soldiers are free.
-constexpr uint32_t FirstMin=3*DelayUnit,FirstMax=8*DelayUnit,CheckEvery=256,ChanceStart=0x8000,ChanceStep=0x4000,ChanceFull=0x10000,CooldownMin=600,CooldownSpread=900;
+// Pressure (r37, user: the computers attacked "rarely, really rarely"): the first attack after a third of the AI's
+// AttackDelay, kept within 2..4 minutes; a check every 128..255 ticks; an army of AssaultMin or more never waits for
+// chance (a smaller one succeeds with 50%, +25% per failed check); a finished campaign rests 150..449 ticks, then the
+// next army forms from whatever soldiers are free. r33 had 3..8 minutes, 256..383, chance for every army and a rest of
+// 600..1,499 (field pid 17196: 8..14 campaigns in 150,000 ticks, most of the time spent walking home and waiting).
+constexpr uint32_t FirstMin=2*DelayUnit,FirstMax=4*DelayUnit,CheckEvery=128,ChanceStart=0x8000,ChanceStep=0x4000,ChanceFull=0x10000,CooldownMin=150,CooldownSpread=300;
 constexpr uint32_t Period=10; // director step, game ticks
-constexpr int MinArmy=5,HomeReserve=2,RaidMax=10,HuntMax=16,SweepEscort=8,AssaultMin=12,PincerMin=14,PincerGap=12,AdoptedRaid=12,RaidChain=3;
+constexpr int MinArmy=5,HomeReserve=2,RaidMax=10,HuntMax=16,SweepEscort=8,AssaultMin=12,PincerMin=14,PincerGap=12,AdoptedRaid=12,RaidChain=5; // r37: a raid chains up to 5 buildings (3)
 constexpr int RaidRadius=20,DefenceRadius=10,SiegeRadius=7,StageDistance=16,AssaultDistance=40;
 // r30 fire keep-off (Euclidean, from each fire centre; shared geometry in citadel-fire.hpp):
 // FireReach 24 = the native maximum, FireLine 27 = no computer unit may stand within it,
@@ -60,22 +70,43 @@ constexpr int RaidRadius=20,DefenceRadius=10,SiegeRadius=7,StageDistance=16,Assa
 using dtfire::FireReach;using dtfire::FireLine;using dtfire::FarmReach;using dtfire::FarmLock;
 constexpr int GardenerKeep=FireLine+1,HallReach=15,HallLock=FireLine+HallReach+2,LegSlack=3,HuntChase=15,HuntKeep=FireLine+HuntChase,LureLimit=3,NoFire=1<<30;
 constexpr uint32_t LureWindow=600,BenchTicks=600,GuardResend=30,ViaTimeout=1500;
+// r38: an extraction counts as a lure episode only when at least LureMin soldiers or a tenth of the army were pulled at
+// once (field pid 3832: a 148-soldier siege was given up after three single stragglers stepped over the line).
+constexpr int LureMin=3;
 // r30 review: RetryPlan = a campaign without a safe way home holds outside the fire and plans again this often;
 // HotHold = a squad on its way home is never handed back with a member within FireLine before this many ticks
 // (reservoirs never move soldiers; only units the fire cannot reach, on green land with no way out, last that long).
 constexpr uint32_t RetryPlan=60,HotHold=12000;
-constexpr uint32_t MarchTimeout=4000,TargetTimeout=9000,CampaignTimeout=40000,HomeTimeout=3000,ReorderEvery=300,AvoidTicks=1000,IgnoreCheck=60,UnknownRetry=100,RetryRaze=30;
+constexpr uint32_t MarchTimeout=2000,TargetTimeout=6000,CampaignTimeout=40000,HomeTimeout=3000,ReorderEvery=300,AvoidTicks=1000,IgnoreCheck=60,UnknownRetry=100,RetryRaze=30;
+// r37: a leg or a target gets its time budget from its length (TicksPerHex: field marches of 280 hex took about 6,000
+// ticks), and a march fails only when the army body came no closer to the leg end for NoProgress ticks or its budget is
+// spent (r33 gave every leg MarchTimeout 4,000: on First Dawn 8 of 14 campaigns ended "target not reached" on farms
+// 290+ hex from home, which were then avoided for 6,000..24,000 ticks). A failed target is replaced from where the army
+// stands (retarget), not walked home from.
+constexpr uint32_t TicksPerHex=25,NoProgress=1500,TargetsNote=3000; // TargetsNote: OFFENCE_TARGETS at most this often per sector
+inline uint32_t legBudget(int hex){return MarchTimeout+TicksPerHex*(uint32_t)std::max(0,hex);}
+inline uint32_t targetBudget(int hex){return TargetTimeout+TicksPerHex*(uint32_t)std::max(0,hex);}
 constexpr double PincerAngle=1.05; // the two flanks: the line from home turned by +-60 degrees around the door
 // Gardeners (native role CGardenerRole, one cell per ~31-tick WORK).
 constexpr uint16_t GardenerType=50;
 // r32: MaxGardeners (20) is the most one campaign holds and the most a large computer keeps alive
 // (gardenersWanted); ParkedDark is the ring size from which a parked citadel's hold is checked.
-constexpr int MaxGardeners=20,MinGardeners=2,SweepGardeners=3,SearchMisses=40,EscortGap=3,DriftLimit=4,ParkedDark=14;
+constexpr int MaxGardeners=20,MinGardeners=2,SweepGardeners=3,SearchMisses=40,EscortGap=3,DriftLimit=4,ParkedDark=14,CallHome=4;constexpr uint32_t CallHomeEvery=600; // r37: far gardeners called home per decision
 constexpr uint32_t GardenerResend=60,GreenWait=20;
 // A Temple/Fortress parking entering settlers is spared its last ring cells for at most HoldMax ticks
 // (continuous recruitment must not make it unbreakable); an allied escort goes home after EscortStall
 // ticks without a greened ring cell.
 constexpr uint32_t HoldMax=900,EscortStall=1500,LostAvoid=6000; // LostAvoid: a target that cost a style's gardeners is avoided this long
+// r33: a target a campaign of the sector failed to reach (march or target timeout, orders not executed, gardeners that do
+// not follow) is avoided LostAvoid, from its FailLimit-th failure LongAvoid; IgnoreLimit ignored orders on one target fail it.
+constexpr int FailLimit=2,IgnoreLimit=3;constexpr uint32_t LongAvoid=2*LostAvoid; // r37: 12,000 (was 24,000)
+// r33: a target whose walking path from the sector home is longer than detourLimit(hex distance) is unreachable for an
+// attack (the field case: 695 steps for a farm 227 hex away behind a lake and a river; straight convoy legs cross water).
+constexpr int DetourSlack=20;
+// r38: 4 x hex + 100 (r33: 2.5 x hex + 20). Armies walk one order per leg over the native pathfinder since r35, so a
+// long walk is a far target, not an unreachable one (the r33 case, 695 steps for 227 hex, is attackable).
+inline int detourLimit(int hex){return 4*std::max(0,hex)+5*DetourSlack;}
+inline bool tooLong(int path,int hex){return path<0||path>detourLimit(hex);}
 // Land reclamation by the free gardeners: Dark ground in the player's own
 // territory always (OwnRadius around each gardener: the computers cannot
 // build on Dark ground), the Dark border after a
@@ -84,8 +115,13 @@ constexpr uint32_t HoldMax=900,EscortStall=1500,LostAvoid=6000; // LostAvoid: a 
 // Temple/Fortress (sieges handle those) or within SiteKeep of a growing site.
 // The keeps cover the ring of a Temple/Fortress/Hall (walkable footprint cells next to the core lie
 // 4..15 tiles from the building position) plus 3, so no gardener is ever sent onto one.
-constexpr int OwnRadius=120,ReclaimRadius=50,ReclaimHome=80,ReclaimPerPass=4,CitadelKeep=18,SiteKeep=18,ParkedKeep=20,SpreadKeep=3;
-constexpr uint32_t ReclaimEvery=150,ReclaimStart=DelayUnit,RecallEvery=30;
+// r33: OwnRadius covers the whole map (the field case: own Dark land 194 hex from the gardeners at home, never found
+// within the old 120); ReclaimNote = how often a pass that sent nobody says why.
+// r33 review: a free gardener reclaims own Dark land alone only near itself (ReclaimRadius) or, standing within
+// LaunchReach of home, within LaunchReach of home; own land farther out is the defence's (soldiers and gardeners as one
+// convoy): r33 first sent idle gardeners alone across the map, where no attack or defence could muster them.
+constexpr int OwnRadius=4096,ReclaimRadius=50,ReclaimHome=80,ReclaimPerPass=4,CitadelKeep=18,SiteKeep=18,ParkedKeep=20,SpreadKeep=3;
+constexpr uint32_t ReclaimEvery=150,ReclaimStart=DelayUnit,RecallEvery=30,ReclaimNote=3000;
 // Sweep: an escort holds a front of Dark land while the gardeners green it,
 // the front moves SweepStep tiles towards the Dark base every SweepAdvance
 // ticks or when the land around it is green; a target building near the front
@@ -131,16 +167,29 @@ struct Config {int mode=0,delay=0,chancePartial=0,thresholdPartial=0,thresholdTo
 struct Strength {int fighters=0,strength=0,darkValue=0,region=0,homeX=0,homeY=0;bool ok=false;};
 // defence = weight (2 each) of Dark Warriors/Throwers/Shamans within RaidRadius of the door.
 // A point target (id 0: sweep front, hunted group) keeps its point in doorX/doorY.
-struct Target {uint16_t id=0,kind=0;uint32_t uid=0;int x=0,y=0,doorX=0,doorY=0,defence=0;bool reachable=false;};
+// r33: detour = walking steps from the sector home beyond the hex distance (0 unknown); a target behind a too long detour is
+// not reachable (the bridge, tooLong()). r37: path = walking steps from the point a choice is made from (ops.paths(): one
+// breadth-first search over the land region for every target; 0 unknown, -1 none within the limit), so the next target is
+// the nearest to walk to from where the army stands (field: a farm 318 hex away was taken over one 40 hex away because
+// the home-based detour was added to the army-based distance).
+struct Target {uint16_t id=0,kind=0;uint32_t uid=0;int x=0,y=0,doorX=0,doorY=0,defence=0,detour=0,path=0;bool reachable=false;};
 struct Soldier {uint16_t id=0,type=0;uint32_t uid=0;int x=0,y=0;};
 enum class Phase:uint8_t {Idle,March,Assault,Return};
-enum class Style:uint8_t {Raid,Assault,Pincer,Sweep,Hunt,Allied};
-inline const char*styleName(Style s){static const char*names[]={"raid","assault","pincer","sweep","hunt","allied"};return names[(int)s];}
+enum class Style:uint8_t {Raid,Assault,Pincer,Sweep,Hunt,Allied,Defend};
+inline const char*styleName(Style s){static const char*names[]={"raid","assault","pincer","sweep","hunt","allied","defend"};return names[(int)s];}
 // Gardeners each style takes along (Allied without free gardeners joins as an escort): the style's base
 // (raid 4, hunt 2, sweep 10, allied 6, assault/pincer 8) plus one per GardenerPer soldiers (r32).
-inline int gardenerBase(Style s){switch(s){case Style::Raid:return 4;case Style::Hunt:return 2;case Style::Sweep:return 10;case Style::Allied:return 6;default:return 8;}}
+inline int gardenerBase(Style s){switch(s){case Style::Raid:return 4;case Style::Hunt:return 2;case Style::Sweep:return 10;case Style::Allied:case Style::Defend:return 6;default:return 8;}}
 inline int gardenersFor(Style s,int soldiers=0){return std::min(MaxGardeners,gardenerBase(s)+std::max(0,soldiers)/GardenerPer);}
-enum class Event:uint8_t {Decline,Launch,Stage,Assault,Siege,Destroyed,Deferred,Retarget,Return,Dissolved,Lost,Adopted,Ignored,Avoid,Collapsed,Greening,Gardeners,Reclaim,Front,Hunt,Join,Call,Fire,Convoy};
+// r43: carrier reserve floor of a computer's home economy, from its kingdom size (completed buildings of every type).
+// The AI's own CPeopleManagerTask sets reserve = clamp(min(7*pendingTasks + 10, carriers - 10), 5, 80), which follows
+// every draft down to 5 idle carriers; the plugin's hook raises each such write to at least carrierKeep(buildings), so
+// the barracks (draft only while carriers > busy + reserve) leaves a pool that grows with the kingdom and new soldiers
+// come only from new residences. The native value is only ever raised.
+constexpr int ReserveBase=15,ReservePer=2,ReserveMax=120; /* r43: 15 idle carriers plus one per ReservePer completed buildings, at most ReserveMax */
+inline int carrierKeep(int buildings){return std::min(ReserveMax,ReserveBase+std::max(0,buildings)/ReservePer);}
+inline int carrierReserve(int native,int buildings){return std::max(native,carrierKeep(buildings));}
+enum class Event:uint8_t {Decline,Launch,Stage,Assault,Siege,Destroyed,Deferred,Retarget,Return,Dissolved,Lost,Adopted,Ignored,Avoid,Collapsed,Greening,Gardeners,Reclaim,Front,Hunt,Join,Call,Fire,Convoy,Defend};
 // Deterministic generator owned by the plugin; the game's LCG (RVA 0xE66B10)
 // drives every native AI decision and must never be consumed.
 struct Random {uint32_t state=0x9e3779b9u;uint32_t next(){state^=state<<13;state^=state>>17;state^=state<<5;return state;}uint32_t bits16(){return next()>>16;}};
@@ -149,8 +198,14 @@ struct Random {uint32_t state=0x9e3779b9u;uint32_t next(){state^=state<<13;state
 // centre and failed search slices. reserved: the cell it greens (job 0xAF
 // only); aim: the cell its search chose (job 0xAE walking to it or 0xAF
 // greening it, role +0x40/+0x44 written by 0x179F80 before either), -1 none.
+// r33: escorted = job 0xB0 (a WATCH order: walk to destX/destY, role +0x18, then wait; the work centre stays).
 enum class Work:uint8_t {Idle,Busy,Searching,Working};
-struct Gardener {uint16_t id=0;uint32_t uid=0;int x=0,y=0,centreX=0,centreY=0,misses=0,reservedX=-1,reservedY=-1,aimX=-1,aimY=-1;Work work=Work::Idle;};
+struct Gardener {uint16_t id=0;uint32_t uid=0;int x=0,y=0,centreX=0,centreY=0,misses=0,reservedX=-1,reservedY=-1,aimX=-1,aimY=-1,destX=-1,destY=-1;Work work=Work::Idle;bool escorted=false;};
+// r36 diagnostics (log only, never stored): a unit the fire guard turned back (guard() for soldiers and held gardeners,
+// reclaim() for free ones). Gardeners also carry the native aim (job target), work state, WATCH (escorted), the
+// campaign cell they had (cellX/cellY) and whether this recall benched them; free = not held by a campaign.
+struct Pulled {uint16_t id=0;int x=0,y=0,aimX=-1,aimY=-1,cellX=-1,cellY=-1,centreX=-1,centreY=-1;Work work=Work::Idle;bool gardener=false,escorted=false,benched=false,free=false;};
+inline Pulled pulledOf(const Gardener&g,bool benched,bool free,int cellX=-1,int cellY=-1){Pulled q;q.id=g.id;q.x=g.x;q.y=g.y;q.aimX=g.aimX;q.aimY=g.aimY;q.cellX=cellX;q.cellY=cellY;q.centreX=g.centreX;q.centreY=g.centreY;q.work=g.work;q.gardener=true;q.escorted=g.escorted;q.benched=benched;q.free=free;return q;}
 // A walkable footprint cell next to the blocked core: the ring that must turn green.
 struct RingCell {int x=0,y=0;bool dark=false,occupied=false;};
 // A circle no gardener is sent into (fire zones, citadels, growing sites, cells already given out):
@@ -180,9 +235,18 @@ struct Campaign {
  // r32 (transient): want = gardeners this campaign keeps (its style's scaled number); legX/legY = start of the
  // first leg of the stored route; gap = farthest held gardener from the army centre at the last convoy look;
  // gdx/gdy = each gardener's last convoy cell; convoyAt = last convoy step; waitSince/waited = the army holds
- // for its gardeners since then / for so long; convoyNote = last OFFENCE_CONVOY line; rally = the army walks to
- // its gardeners first; rearX/rearY = where the gardeners wait behind the screen; flankAt = last pincer flank order.
- int want=0,legX=0,legY=0,gap=0,rearX=-1,rearY=-1,gdx[MaxGardeners]={},gdy[MaxGardeners]={};uint32_t convoyAt=0,waitSince=0,waited=0,convoyNote=0,flankAt=0;bool rally=false;
+ // at its staging cell for its gardeners since then / for so long (r35, StageWait); convoyNote = last OFFENCE_CONVOY line;
+ // rearX/rearY = where the gardeners wait behind the screen; flankAt = last pincer flank order.
+ int want=0,legX=0,legY=0,gap=0,rearX=-1,rearY=-1,gdx[MaxGardeners]={},gdy[MaxGardeners]={};uint32_t convoyAt=0,waitSince=0,waited=0,convoyNote=0,flankAt=0;
+ // r33 (transient): failUid/fails = targets campaigns of this sector failed to reach and how often; ignoredOrders =
+ // ORDER_IGNORED on the current target; lookAt = last intrusion look; defendEnd = when the last defence ended; recallAt =
+ // last recall of an attack; reclaimNote/defendNote/defendWhy = rate limits of the idle reclaim and defence notes;
+ // threat* = the intrusion as last assessed (units in or near the territory, Dark fighters among them, own Dark cells, rise).
+ // r37 (transient): callHomeAt = last call of far gardeners home; landDefendAt = last land-only defence; nearX/nearY/nearBest/
+ // nearAt = the leg end the march progress is measured to, the best body distance to it and when it last improved;
+ // targetHex = hex distance to the target when it was taken (its time budget).
+ uint32_t callHomeAt=0,landDefendAt=0,nearAt=0,targetsNote=0;int nearX=-1,nearY=-1,nearBest=0,targetHex=0;bool landOnly=false; /* landOnly: this defence started against land alone (its budget is LandDefendTime) */
+ int ignoredOrders=0,threatUnits=0,threatFighters=0,threatOwn=0,threatRise=0;uint32_t failUid[4]={},lookAt=0,defendEnd=0,recallAt=0,reclaimNote=0,defendNote=0;uint8_t fails[4]={};const char*defendWhy="";
  const char*reason="";int value=0,versus=0,dissolveTries=0;
  int8_t only=-1; // offline tests only: the one style decide() may choose (-1: weighted choice)
 };
@@ -191,7 +255,13 @@ inline Army summary(const std::vector<Soldier>&m){Army a;a.count=(int)m.size();i
 inline int within(const std::vector<Soldier>&m,int x,int y,int r){int n=0;for(auto&s:m)if(distance(s.x,s.y,x,y)<=r)n++;return n;}
 inline int countKind(const std::vector<Target>&t,uint16_t kind){int n=0;for(auto&b:t)if(b.kind==kind)n++;return n;}
 inline bool avoided(const Campaign&c,uint32_t uid,uint32_t t){for(int i=0;i<4;i++)if(c.avoidUid[i]==uid&&t<c.avoidUntil[i])return true;return false;}
-inline void avoid(Campaign&c,uint32_t uid,uint32_t t,uint32_t ticks=AvoidTicks){int k=0;for(int i=1;i<4;i++)if(c.avoidUid[i]==uid||c.avoidUntil[i]<c.avoidUntil[k])k=i;c.avoidUid[k]=uid;c.avoidUntil[k]=t+ticks;}
+inline void avoid(Campaign&c,uint32_t uid,uint32_t t,uint32_t ticks=AvoidTicks){int k=-1;uint32_t until=t+ticks;for(int i=0;i<4;i++)if(c.avoidUid[i]==uid)k=i; /* r33: a running longer avoidance is kept */
+ if(k>=0)until=std::max(until,c.avoidUntil[k]);else{k=0;for(int i=1;i<4;i++)if(c.avoidUntil[i]<c.avoidUntil[k])k=i;}c.avoidUid[k]=uid;c.avoidUntil[k]=until;}
+// r33: a failed target (not reached, orders not executed, gardeners that do not follow): avoided LostAvoid, from its
+// FailLimit-th failure in this sector LongAvoid (the field case relaunched on the same unreachable farm five times).
+inline int failures(const Campaign&c,uint32_t uid){for(int i=0;i<4;i++)if(uid&&c.failUid[i]==uid)return c.fails[i];return 0;}
+inline void failed(Campaign&c,uint32_t uid,uint32_t t){if(!uid)return;int k=-1;for(int i=0;i<4;i++)if(c.failUid[i]==uid)k=i;
+ if(k<0){k=0;for(int i=1;i<4;i++)if(c.fails[i]<c.fails[k])k=i;c.failUid[k]=uid;c.fails[k]=0;}if(c.fails[k]<255)c.fails[k]++;avoid(c,uid,t,c.fails[k]>=FailLimit?LongAvoid:LostAvoid);}
 // A pincer army in two halves, by a stable hash of each soldier's identity (a death never swaps flanks).
 inline void halves(const std::vector<Soldier>&m,std::vector<Soldier>&a,std::vector<Soldier>&b){a.clear();b.clear();for(auto&s:m)((((s.uid*2654435761u)>>31)&1)?b:a).push_back(s);}
 // Soldiers holding the ordered cell (either cell of a split army).
@@ -230,6 +300,20 @@ inline int soldierKeep(int n){return FireLine+spread(n);}
 // A straight leg: members walk their own lines from their own slots around the start to their
 // slots around the end, up to spread(n) beside the army's line, and bend a little more (soak).
 inline int legKeep(int n){return FireLine+spread(n)+LegSlack;}
+// r33: the army body: the soldiers within max(BodyReach, 2*spread(N)) of the median cell (x and y medians), so soldiers
+// still walking in from scattered reservoirs or formation slots do not drag the reference (the r32 mean did). x,y = the
+// median cell; count/weight of the body; core = its soldiers. reachOf = distance to the nearest of them; spanOf = the
+// farthest gardener's reachOf (the convoy gap).
+constexpr int BodyReach=8;
+inline Army body(const std::vector<Soldier>&m,std::vector<Soldier>*core=nullptr){
+ Army a;if(core)core->clear();if(m.empty())return a;std::vector<int> xs,ys;xs.reserve(m.size());ys.reserve(m.size());for(auto&s:m){xs.push_back(s.x);ys.push_back(s.y);}
+ size_t h=xs.size()/2;std::nth_element(xs.begin(),xs.begin()+h,xs.end());std::nth_element(ys.begin(),ys.begin()+h,ys.end());a.x=xs[h];a.y=ys[h];
+ int r=std::max(BodyReach,2*spread((int)m.size()));for(auto&s:m)if(distance(s.x,s.y,a.x,a.y)<=r){a.count++;a.weight+=soldierWeight(s.type);if(core)core->push_back(s);}
+ if(!a.count){Army b=summary(m);a.count=b.count;a.weight=b.weight;if(core)*core=m;}
+ return a;
+}
+inline int reachOf(const std::vector<Soldier>&core,int x,int y){int b=1<<30;for(auto&s:core)b=std::min(b,distance(s.x,s.y,x,y));return b;}
+inline int spanOf(const std::vector<Gardener>&gs,const std::vector<Soldier>&core){int g=0;for(auto&q:gs)g=std::max(g,reachOf(core,q.x,q.y));return g;}
 // A target the computers never take while the fire is on: the Temple and the Fortress, a farm
 // within FarmLock of a fire centre (dtfire::farmTooClose; the Dark blockade keeps new farms out,
 // only old saves can have one) and a Hall within HallLock (its ring reaches 15).
@@ -242,17 +326,22 @@ struct Pick {bool citadel=true;int limit=-1;bool weakest=false;}; // limit: max 
 // Farms first: while a reachable, unlocked Mushroom Farm stands, only unlocked
 // farms are targets. Without one: the Temple/Fortress (only while the fire is
 // off), then the Manacopter Halls (unlocked ones while it is on). Locked
-// targets are never chosen. Nearest first. Returns an index or -1.
-constexpr long HallLater=5000;
+// targets are never chosen. Nearest first: by the walking path from the
+// chooser's position when known (r37), else the hex distance plus the home
+// detour; a farm with other usable farms within ClusterRadius counts
+// ClusterBonus closer per neighbour (at most ClusterMax), so the army chains
+// through a group of farms. Returns an index or -1.
+constexpr long HallLater=5000;constexpr int ClusterRadius=40,ClusterBonus=8,ClusterMax=24;
 inline int chooseTarget(const std::vector<Target>&all,const Fire&f,int fromX,int fromY,const Pick&pick,const Campaign*c=nullptr,uint32_t t=0){
- auto usable=[&](const Target&b){return b.reachable&&!(c&&avoided(*c,b.uid,t));};
+ auto usable=[&](const Target&b){return b.reachable&&b.path>=0&&!(c&&avoided(*c,b.uid,t));}; /* r37: path -1 = no walk from here */
  bool farms=false;
- for(auto&b:all)if(b.kind==Farm&&b.reachable&&!locked(b,f))farms=true; /* avoided farms still forbid other targets; locked farms do not */
+ for(auto&b:all)if(b.kind==Farm&&usable(b)&&!locked(b,f))farms=true; /* r33: neither avoided (failed) nor locked farms forbid other targets */
  int best=-1,low=-1;long bestScore=0,lowScore=0;
  for(int i=0;i<(int)all.size();i++){const Target&b=all[i];if(!usable(b))continue;
   if(locked(b,f))continue;
   if(farms?b.kind!=Farm:!(b.kind==Hall||(pick.citadel&&(b.kind==Temple||b.kind==Fortress))))continue;
-  long score=distance(fromX,fromY,b.doorX,b.doorY)+(b.kind==Hall&&pick.citadel&&!f.on?HallLater:0);
+  long score=(b.path>0?(long)b.path:distance(fromX,fromY,b.doorX,b.doorY)+std::max(0,b.detour))+(b.kind==Hall&&pick.citadel&&!f.on?HallLater:0); /* r33: plus the walking detour; r37: the walked path when known */
+  if(farms){int kin=0;for(auto&o:all)if(&o!=&b&&o.kind==Farm&&usable(o)&&!locked(o,f)&&distance(o.doorX,o.doorY,b.doorX,b.doorY)<=ClusterRadius)kin++;score-=std::min(ClusterMax,ClusterBonus*kin);} /* kin: near/far are Windows macros */
   if(pick.limit<0||b.defence<=pick.limit){if(best<0||score<bestScore){best=i;bestScore=score;}}
   long weak=(long)b.defence*100000L+score;if(low<0||weak<lowScore){low=i;lowScore=weak;}
  }
@@ -398,8 +487,9 @@ inline bool cluster(const std::vector<std::pair<int,int>>&fs,const Fire&f,int fr
 // bool destroy(const Campaign&,const Target&); bool dissolve(Campaign&); void report(Event,const Campaign&).
 // Gardeners: void gardeners(const Campaign&,std::vector<Gardener>&) (the player's living gardeners in the
 // sector's region that no campaign holds); bool gardener(const Campaign&,uint16_t id,uint32_t uid,Gardener&);
-// void sendGardener(const Campaign&,const Gardener&,int x,int y) (one per order: its work centre);
-// void moveGardeners(const Campaign&,const std::vector<Gardener>&,int x,int y);
+// void sendGardener(const Campaign&,const Gardener&,int x,int y) (one per order, FORWARD: its work centre);
+// r33: void park(const Campaign&,const Gardener&,int x,int y) (one per order, WATCH: job 0xB0 walks there and waits,
+// the work centre stays); void intrusion(const Campaign&,Intrusion&) (see Intrusion);
 // void ring(const Target&,std::vector<RingCell>&); bool beside(const Target&,const RingCell&,int&x,int&y);
 // void clearFootprint(const Campaign&,const Target&,const std::vector<Soldier>&,const Fire&) (never onto a cell within FireLine);
 // bool darkNear(const Campaign&,int x,int y,int radius,const std::vector<Keep>&,int&dx,int&dy) (nearest
@@ -412,10 +502,16 @@ inline bool cluster(const std::vector<std::pair<int,int>>&fs,const Fire&f,int fr
 // bool leads(const Campaign&,const Target&) (no other campaign besieging that target comes first);
 // bool call(const Campaign&,uint32_t t,Target&) (another computer's open call); bool announce(const Campaign&,uint32_t t,const Target&)
 // (opens a call when another computer enemy of the Dark player exists).
+// r33: the Dark presence in a computer's territory, as the bridge reads it: own = walkable Dark cells the player owns
+// (territory scan), rise = their growth over the last full scan pass; gardeners/fighters = Dark Gardeners (type 52) and
+// Dark Warriors/Throwers/Shamans standing in or within 4 of the player's territory (the native intruder test 0x1B17E0),
+// in the sector's land region.
+struct Intrusion {int own=0,rise=0;std::vector<std::pair<int,int>> gardeners,fighters;};
 template<class Ops> void decline(Campaign&c,uint32_t t,Ops&ops,const char*why){
  c.reason=why;ops.report(Event::Decline,c);if(c.chance<ChanceFull)c.chance=std::min<uint32_t>(ChanceFull,c.chance+ChanceStep);c.nextCheck=t+CheckEvery+(c.random.next()&127);
 }
-inline void toIdle(Campaign&c,uint32_t t){c.dissolveTries=0;c.phase=Phase::Idle;c.squad=0;c.progress=0;c.vias=0;c.viaAt=0;c.lures=0;c.replanAt=0;c.homeless=false;c.split=false;c.hunting=false;c.escort=false;c.deferredSince=0;c.nextTry=0;c.greenSince=0;c.ringDark=-1;c.razed=false;c.holding=false;c.gardeners=0;c.chain=0;c.quietSince=0;c.checked=true;c.target=Target{};c.rally=false;c.waitSince=0;c.waited=0;c.gap=0;c.convoyAt=0;c.rearX=c.rearY=-1;c.flankAt=0;
+inline void toIdle(Campaign&c,uint32_t t){c.dissolveTries=0;c.phase=Phase::Idle;c.squad=0;c.progress=0;c.vias=0;c.viaAt=0;c.lures=0;c.replanAt=0;c.homeless=false;c.split=false;c.hunting=false;c.escort=false;c.deferredSince=0;c.nextTry=0;c.greenSince=0;c.ringDark=-1;c.razed=false;c.holding=false;c.gardeners=0;c.chain=0;c.quietSince=0;c.checked=true;c.target=Target{};c.waitSince=0;c.waited=0;c.gap=0;c.convoyAt=0;c.rearX=c.rearY=-1;c.flankAt=0;c.ignoredOrders=0;
+ if(c.style==Style::Defend)c.defendEnd=t?t:1; /* r33: defences rest before the next one */
  c.nextCheck=t+CheckEvery+(c.random.next()&127);c.cooldownUntil=t+CooldownMin+c.random.next()%CooldownSpread;c.chance=ChanceStart;c.joinedUid=0;}
 // r30 gardener tracker: the entry of gardener (id, uid), else the oldest one not benched.
 inline GardenerWatch&watchOf(Campaign&c,uint16_t id,uint32_t uid,uint32_t t){
@@ -432,11 +528,12 @@ inline int recall(Campaign&c,const Gardener&g,uint32_t t){
  else if(t-w.sentAt<GuardResend)return 0;
  w.sentAt=t;if(w.recalls>=2){w.benchUntil=t+BenchTicks;return 2;}return 1;
 }
-// The campaign's gardeners still alive (dead or lost ones are dropped).
+// The campaign's gardeners still alive (dead or lost ones are dropped; r33: counted as lost at a besieged target here,
+// whoever looks first: a convoy step on the assault leg drops them before the siege could count them).
 template<class Ops> void living(Campaign&c,Ops&ops,std::vector<Gardener>&out){
  out.clear();int n=0;
  for(int i=0;i<c.gardeners;i++){Gardener g;if(!ops.gardener(c,c.gid[i],c.guid[i],g))continue;c.gid[n]=c.gid[i];c.guid[n]=c.guid[i];c.gsent[n]=c.gsent[i];c.gcx[n]=c.gcx[i];c.gcy[n]=c.gcy[i];c.gdx[n]=c.gdx[i];c.gdy[n]=c.gdy[i];n++;out.push_back(g);}
- c.gardeners=n;
+ if(c.phase==Phase::Assault&&c.target.id)c.lost+=c.gardeners-n;c.gardeners=n;
 }
 inline void dropGardener(Campaign&c,int i){if(i<0||i>=c.gardeners)return;for(int k=i+1;k<c.gardeners;k++){c.gid[k-1]=c.gid[k];c.guid[k-1]=c.guid[k];c.gsent[k-1]=c.gsent[k];c.gcx[k-1]=c.gcx[k];c.gcy[k-1]=c.gcy[k];c.gdx[k-1]=c.gdx[k];c.gdy[k-1]=c.gdy[k];}c.gardeners--;}
 // Take up to n free gardeners nearest to (x,y) that accept() takes and the fire guard has not
@@ -451,40 +548,47 @@ template<class Ops,class Accept> int assign(Campaign&c,Ops&ops,int x,int y,int n
 template<class Ops> int assign(Campaign&c,Ops&ops,int x,int y,int n,uint32_t t){return assign(c,ops,x,y,n,t,[](const Gardener&){return true;});}
 inline void resetCells(Campaign&c){for(int i=0;i<MaxGardeners;i++){c.gcx[i]=-1;c.gcy[i]=-1;c.gsent[i]=0;}c.topUps=0;c.lost=0;c.parkedSince=0;}
 template<class Ops> void send(Campaign&c,uint32_t t,Ops&ops,const std::vector<Soldier>&m,int x,int y,bool home){
- Army a=summary(m);c.orderAt=t;c.orderX=a.x;c.orderY=a.y;c.goalX=x;c.goalY=y;c.checked=false;c.lastOrder=t;ops.move(c,m,x,y,home);
+ Army a=body(m);c.orderAt=t;c.orderX=a.x;c.orderY=a.y;c.goalX=x;c.goalY=y;c.checked=false;c.lastOrder=t;ops.move(c,m,x,y,home); /* r33: the body, as the ORDER_IGNORED check reads it */
 }
 // A pincer: the even half to (x,y), the odd half to (x2,y2).
 template<class Ops> void sendSplit(Campaign&c,uint32_t t,Ops&ops,const std::vector<Soldier>&m,int x,int y,int x2,int y2){
- std::vector<Soldier> a,b;halves(m,a,b);Army s=summary(a);c.orderAt=t;c.orderX=s.x;c.orderY=s.y;c.goalX=x;c.goalY=y;c.goal2X=x2;c.goal2Y=y2;c.checked=false;c.lastOrder=t;
+ std::vector<Soldier> a,b;halves(m,a,b);Army s=body(a);c.orderAt=t;c.orderX=s.x;c.orderY=s.y;c.goalX=x;c.goalY=y;c.goal2X=x2;c.goal2Y=y2;c.checked=false;c.lastOrder=t;
  if(!a.empty())ops.move(c,a,x,y,false);if(!b.empty())ops.move(c,b,x2,y2,false);
-}
-// Gardeners follow the soldiers (march, way home) as one group.
-template<class Ops> void follow(Campaign&c,uint32_t t,Ops&ops,int x,int y){
- std::vector<Gardener> gs;living(c,ops,gs);if(gs.empty())return;ops.moveGardeners(c,gs,x,y);for(int i=0;i<c.gardeners;i++)c.gsent[i]=t;
 }
 // Units the group orders spread: soldiers and the gardeners that follow them.
 inline int groupSize(const Campaign&c,const std::vector<Soldier>&m){return std::max(1,std::max((int)m.size(),c.gardeners));}
 // r32 convoy: the army and its gardeners march as one group (the field case: the soldiers stood at a farm while
-// their gardeners trailed far behind, unprotected). Every ConvoyEvery ticks the army is ordered to the point of
-// its current leg ConvoyLead tiles closer to the leg's end than the convoy's rear (the army centre or the gardeners'
-// centre, whichever is farther from it), the gardeners (one id per order) to cells around the point ConvoyBehind tiles behind it, inside the
-// army. While a gardener is farther than convoyLimit() from the army centre the army gets no new forward order
-// and the gardeners are ordered to it; a gardener still that far after ConvoyStall ticks of waiting is left
-// behind (free again). A leg (via, staging cell, home) ends only with the convoy together. SettlerValues.xml
-// gives every settler type the same (empty, atoi 0 at 0x183CE1) speed byte, so soldiers and gardeners walk alike;
-// the convoy does not rely on it (soaks run gardeners slower too).
-// RallyGap/GatherHome: an army in the field (beyond GatherHome of home) whose gardeners' centre lies beyond
-// RallyGap walks to them first (a hunt's hand-over). TopUpReach: replacements only from free gardeners this
-// close to the army (others wait at home for the next convoy). EscortRadius: a waiting gardener farther from the
-// army is called back to the rear point. RearStep: the rear point lies this far behind the screen towards the
-// army's approach. ScreenRing/ThreatRadius: the screen stands within ScreenRing of the door on the side of the
-// nearest Dark fighter within ThreatRadius. GuardWait: gardeners start greening when the screen holds, or this
-// long after the assault began (never while Dark fighters are near the door).
-constexpr int ConvoyLead=10,ConvoyGap=8,ConvoyBehind=3,RallyGap=30,GatherHome=30,TopUpReach=20,EscortRadius=16,RearStep=4,ScreenRing=6,ThreatRadius=30;
-constexpr uint32_t ConvoyEvery=30,ConvoyStall=600,ConvoyNote=300,GuardWait=300;
+// their gardeners trailed far behind, unprotected). SettlerValues.xml gives every settler type the same (empty,
+// atoi 0 at 0x183CE1) speed byte, so soldiers and gardeners walk alike; the soaks run gardeners slower too.
+// r33: escorted gardeners move with WATCH (park: job 0xB0 walks there and waits, the work centre stays, so no gardener
+// greens its way off while following; FORWARD only onto work: a ring cell, a sweep or defence cell, reclaim, the release
+// at home). The gap is the farthest held gardener's distance to the nearest soldier of the army body (body()); the
+// convoy is together while it is within convoyLimit(). Gardeners are dropped only when dead, benched by the fire guard
+// or standing in another land region.
+// r35 (user: "it should not babysit gardeners that hard, movement of army should be fast"; field pid 22316, r34: armies
+// held 2,000..5,000 ticks "waiting for gardeners" with gaps up to 234, and a 221-soldier army stepped ConvoyLead tiles
+// every ConvoyEvery ticks re-formed on each step and hardly moved: "order not executed" on every look): the army walks
+// each leg (waypoint, staging cell, assault cell, home) in one order straight to its end and never holds or walks back
+// for its gardeners on the way. The gardeners follow to their own cells around the same leg end (follow()), behind the
+// army because they start behind it and walk alike. Only the staging cell waits for them, StageWait ticks at most
+// (gathered()); the assault then starts and late gardeners join at the rear point behind the screen. ConvoyLead now
+// only sizes the short last leg of a direct assault and the ORDER_IGNORED check.
+// GatherHome: the home area (the release of a gardener). RallyGap: half of PickReach. TopUpReach: replacements only
+// from free gardeners this close to the army (others wait at home for the next convoy). EscortRadius: a waiting
+// gardener farther from the army is called back to the rear point. RearStep: the rear point lies this far behind the
+// screen towards the army's approach. ScreenRing/ThreatRadius: the screen stands within ScreenRing of the door on the
+// side of the nearest Dark fighter within ThreatRadius. GuardWait: gardeners start greening when the screen holds, or
+// this long after the assault began (never while Dark fighters are near the door).
+// r33: LaunchReach = a new campaign takes free gardeners only this close to home (reclaim sends free gardeners up to
+// ReclaimHome+ReclaimRadius out), PickReach = a hand-over or adopted army only this close to the army; SnapRing = a leg
+// end on unwalkable land (water) moves to the nearest standable cell within this many rings; ConvoyResend = the earliest
+// re-order of one gardener.
+constexpr int ConvoyLead=10,ConvoyGap=8,RallyGap=30,GatherHome=30,TopUpReach=20,EscortRadius=16,RearStep=4,ScreenRing=6,ThreatRadius=30;
+constexpr int LaunchReach=ReclaimHome+ReclaimRadius,PickReach=2*RallyGap,SnapRing=6;
+constexpr uint32_t ConvoyEvery=30,ConvoyNote=300,GuardWait=300,ConvoyResend=GuardResend,StageWait=300;
 inline int convoyLimit(int gardeners){return ConvoyGap+spread(std::max(1,gardeners));}
 inline int gapOf(const std::vector<Gardener>&gs,int x,int y){int g=0;for(auto&q:gs)g=std::max(g,distance(q.x,q.y,x,y));return g;}
-inline bool convoying(const Campaign&c){return c.gardeners>0&&!c.hunting&&!c.rally;}
+inline bool convoying(const Campaign&c){return c.gardeners>0&&!c.hunting;}
 // The cell of the segment (ox,oy)-(dx,dy) at hex distance rem from (dx,dy) (clamped to the segment; the hex
 // distance is a norm, so it scales linearly along the segment).
 inline void along(int ox,int oy,int dx,int dy,int rem,int&cx,int&cy){int len=distance(ox,oy,dx,dy);if(rem<=0||len<=0){cx=dx;cy=dy;return;}if(rem>=len){cx=ox;cy=oy;return;}
@@ -493,59 +597,78 @@ inline void along(int ox,int oy,int dx,int dy,int rem,int&cx,int&cy){int len=dis
 inline void slot(int i,int&dx,int&dy){dx=dy=0;if(i<=0)return;static const int nx[6]={1,1,0,-1,-1,0},ny[6]={0,1,1,0,-1,-1};int k=1,n=i-1;while(n>=6*k){n-=6*k;k++;}int j=n/k,s=n%k;dx=k*nx[j]+s*nx[(j+2)%6];dy=k*ny[j]+s*ny[(j+2)%6];}
 // The start of the current leg of the stored route.
 inline void legFrom(const Campaign&c,int&x,int&y){if(c.viaAt>0&&c.viaAt<=c.vias){x=c.vx[c.viaAt-1];y=c.vy[c.viaAt-1];}else{x=c.legX;y=c.legY;}}
-// Gardeners (one id per order, FORWARD) to their own cells around (x,y) at twice the hex spiral offsets (the point
-// itself when that cell is not standable, keeps GardenerKeep or lies next to the target's footprint), only along
-// a clear leg; take(i, g) picks who goes; one already sent close to its cell within 2*ReorderEvery is left alone.
-// r32 review: spot(x, y) refuses slot cells (a rear point's cells nearer the threat than the screen); the point (x,y)
-// itself is taken as it is.
+// r33: a gardener parked for (x,y) needs no new order: WATCH (job 0xB0) for that cell and still walking or standing within 3 of it.
+inline bool settled(const Gardener&g,int x,int y){return g.escorted&&(g.destX<0||distance(g.destX,g.destY,x,y)<=1)&&(g.work==Work::Busy||distance(g.x,g.y,x,y)<=3);}
+// Gardeners (one id per order) parked (r33: WATCH) on their own cells around (x,y): the odd lattice x+2*dx+1, y+2*dy of
+// the hex spiral (never a formation slot of a group order to (x,y), where the soldiers stand), else the nearest acceptable
+// cell within 3 of it, else of (x,y) itself (r32 skipped the gardener when its slot and the point were occupied, so a
+// held army sent nobody); a cell is acceptable when standable, GardenerKeep from the fire, spare next to the target and
+// spot() takes it (r32 review: a rear point's cells nearer the threat than the screen are refused); only along a clear
+// leg; take(i, g) picks who goes; r33: re-ordered from its real state (settled()), at most every ConvoyResend ticks.
 template<class Ops,class Take,class Spot> int gather(Campaign&c,uint32_t t,Ops&ops,const std::vector<Gardener>&gs,const Fire&f,int x,int y,Take take,Spot spot){
- int sent=0;auto bad=[&](int qx,int qy){return closer(qx,qy,f,GardenerKeep)||!ops.stand(c,qx,qy,1)||(c.target.id&&!ops.spare(c.target,qx,qy));};
- for(int i=0;i<(int)gs.size()&&i<c.gardeners;i++){const Gardener&g=gs[i];if(!take(i,g))continue;int ox=0,oy=0;slot(i,ox,oy);int px=x+2*ox,py=y+2*oy;
-  if(bad(px,py)||!spot(px,py)){px=x;py=y;if(bad(px,py))continue;}
-  if(c.gdx[i]>=0&&distance(c.gdx[i],c.gdy[i],px,py)<2&&t-c.gsent[i]<2*ReorderEvery)continue;
+ int sent=0;std::vector<std::pair<int,int>> used;
+ auto bad=[&](int qx,int qy){if(closer(qx,qy,f,GardenerKeep)||!ops.stand(c,qx,qy,1)||(c.target.id&&!ops.spare(c.target,qx,qy))||!spot(qx,qy))return true;for(auto&u:used)if(u.first==qx&&u.second==qy)return true;return false;};
+ for(int i=0;i<(int)gs.size()&&i<c.gardeners;i++){const Gardener&g=gs[i];if(!take(i,g))continue;int ox=0,oy=0;slot(i,ox,oy);int px=x+2*ox+1,py=y+2*oy;
+  if(bad(px,py)){bool found=false;int best=0,bx=0,by=0;
+   for(int k=0;k<2&&!found;k++){int sx=k?x:px,sy=k?y:py;for(int r=k;r<=3;r++)for(int qy=-r;qy<=r;qy++)for(int qx=-r;qx<=r;qx++){int ax=sx+qx,ay=sy+qy;if(distance(sx,sy,ax,ay)!=r||bad(ax,ay))continue;int d=distance(ax,ay,px,py)*4+r;if(!found||d<best){found=true;best=d;bx=ax;by=ay;}}}
+   if(!found)continue;px=bx;py=by;}
+  used.push_back({px,py});
+  if(c.gdx[i]>=0&&distance(c.gdx[i],c.gdy[i],px,py)<2&&settled(g,c.gdx[i],c.gdy[i]))continue;
+  if(c.gsent[i]&&t-c.gsent[i]<ConvoyResend)continue;
   if(!legClear(g.x,g.y,px,py,f,GardenerKeep))continue; /* never across the fire: the guard brings it out first */
-  ops.sendGardener(c,g,px,py);c.gdx[i]=px;c.gdy[i]=py;c.gsent[i]=t;sent++;}
+  ops.park(c,g,px,py);c.gdx[i]=px;c.gdy[i]=py;c.gsent[i]=t?t:1;sent++;}
  return sent;
 }
 template<class Ops,class Take> int gather(Campaign&c,uint32_t t,Ops&ops,const std::vector<Gardener>&gs,const Fire&f,int x,int y,Take take){return gather(c,t,ops,gs,f,x,y,take,[](int,int){return true;});}
 template<class Ops> int gather(Campaign&c,uint32_t t,Ops&ops,const std::vector<Gardener>&gs,const Fire&f,int x,int y){return gather(c,t,ops,gs,f,x,y,[](int,const Gardener&){return true;});}
-// The convoy is together: no gardener (held, living) farther than convoyLimit() from the army centre.
+// r33: a held gardener given work (FORWARD: a ring, sweep or defence cell): no longer parked there.
+template<class Ops> void work(Campaign&c,uint32_t t,Ops&ops,int i,const Gardener&g,int x,int y){ops.sendGardener(c,g,x,y);if(i>=0&&i<c.gardeners){c.gdx[i]=c.gdy[i]=-1;c.gsent[i]=t?t:1;}}
+// The convoy is together: no gardener (held, living) farther than convoyLimit() from the nearest soldier of the army body (r33).
 template<class Ops> bool together(Campaign&c,Ops&ops,const std::vector<Soldier>&m){
- if(!convoying(c)||m.empty())return true;std::vector<Gardener> gs;living(c,ops,gs);if(gs.empty())return true;Army a=summary(m);c.gap=gapOf(gs,a.x,a.y);return c.gap<=convoyLimit((int)gs.size());
+ if(!convoying(c)||m.empty())return true;std::vector<Gardener> gs;living(c,ops,gs);if(gs.empty())return true;std::vector<Soldier> core;body(m,&core);c.gap=spanOf(gs,core);return c.gap<=convoyLimit((int)gs.size());
 }
-// One convoy step of the army m towards (dx,dy) along the leg from (ox,oy). False when neither the leg from the
-// army to its next point nor to (dx,dy) is clear of the fire (the caller plans again).
+template<class Ops> bool holdPoint(const Campaign&c,Ops&ops,const Fire&f,int x0,int y0,int fromX,int fromY,int keep,int&hx,int&hy);
+template<class Ops> void startReturn(Campaign&c,uint32_t t,Ops&ops,const std::vector<Soldier>&m,const char*why);
+// r33: held gardeners standing in another land region than the sector's (no walk to the army exists) are dropped.
+template<class Ops> void strays(Campaign&c,Ops&ops,std::vector<Gardener>&gs){bool any=false;for(int i=std::min((int)gs.size(),c.gardeners)-1;i>=0;i--)if(!ops.reach(c,gs[i].x,gs[i].y)){dropGardener(c,i);any=true;}if(any)living(c,ops,gs);}
+// r35: the held gardeners to their cells around the leg end (dx,dy) (gather(): WATCH, one id per order, re-ordered only
+// when the cell changes). A gardener whose straight way there passes the fire (GardenerKeep) takes the latest point of
+// the stored route it reaches clear instead: the leg start (ox,oy), then the earlier waypoints back to the route start.
+template<class Ops> void follow(Campaign&c,uint32_t t,Ops&ops,const std::vector<Gardener>&gs,const Fire&f,int ox,int oy,int dx,int dy){
+ int px[MaxVias+3],py[MaxVias+3],k=0;px[k]=dx;py[k++]=dy;px[k]=ox;py[k++]=oy;
+ for(int v=std::min(c.viaAt,c.vias)-1;v>=0;v--){px[k]=c.vx[v];py[k++]=c.vy[v];}px[k]=c.legX;py[k++]=c.legY;
+ int pick[MaxGardeners];int held=std::min((int)gs.size(),c.gardeners);
+ for(int i=0;i<held;i++){pick[i]=-1;for(int q=0;q<k&&pick[i]<0;q++)if(!f.on||legClear(gs[i].x,gs[i].y,px[q],py[q],f,GardenerKeep))pick[i]=q;}
+ for(int q=0;q<k;q++){bool any=false;for(int i=0;i<held;i++)if(pick[i]==q)any=true;
+  if(any)gather(c,t,ops,gs,f,px[q],py[q],[&](int i,const Gardener&){return i<held&&pick[i]==q;});}
+}
+// One convoy step of the army m towards (dx,dy) along the leg from (ox,oy) (r35: one order to the leg end, the
+// gardeners following). False when the leg from the army to (dx,dy) is not clear of the fire (the caller plans again).
 template<class Ops> bool convoy(Campaign&c,uint32_t t,Ops&ops,const std::vector<Soldier>&m,const Fire&f,int ox,int oy,int dx,int dy,bool home){
- std::vector<Gardener> gs;living(c,ops,gs);c.convoyAt=t?t:1;
- if(m.empty()){c.gap=0;if(!gs.empty())gather(c,t,ops,gs,f,dx,dy);return true;} /* the army is gone: the gardeners walk on */
- if(gs.empty()){c.gap=0;c.waitSince=0;c.waited=0;if(c.goalX!=dx||c.goalY!=dy||!c.orderAt||t-c.lastOrder>=2*ReorderEvery)send(c,t,ops,m,dx,dy,home);return true;}
- Army a=summary(m);int n=groupSize(c,m),limit=convoyLimit((int)gs.size());c.gap=gapOf(gs,a.x,a.y);
- /* An army near the fire (leaving it by its exit leg) never holds or steps short: everyone straight to (dx,dy). */
- if(f.on&&closer(a.x,a.y,f,soldierKeep(n))){c.waitSince=0;c.waited=0;if(c.goalX!=dx||c.goalY!=dy||!c.orderAt||t-c.lastOrder>=GuardResend)send(c,t,ops,m,dx,dy,home);gather(c,t,ops,gs,f,dx,dy);return true;}
- if(c.gap>limit){
-  if(!c.waitSince)c.waitSince=t?t:1;c.waited=t-c.waitSince;c.lastOrder=t; /* holding is the army's order */
-  if(c.waited<ConvoyStall){gather(c,t,ops,gs,f,a.x,a.y);
-   if(!c.convoyNote||t-c.convoyNote>=ConvoyNote){c.convoyNote=t?t:1;Campaign note=c;note.value=0;note.versus=limit;note.goalX=a.x;note.goalY=a.y;note.reason="waiting for gardeners";ops.report(Event::Convoy,note);}
-   return true;}
-  /* r32 review: a gardener left behind walks home (never on to the army's waiting cell, its last work centre). */
-  Strength hs=ops.strength(c);int k=0;for(int i=std::min((int)gs.size(),c.gardeners)-1;i>=0;i--)if(distance(gs[i].x,gs[i].y,a.x,a.y)>limit){dropGardener(c,i);k++;if(hs.ok)sendOut(c,ops,gs[i],f,hs.homeX,hs.homeY);}
-  living(c,ops,gs);Campaign note=c;note.value=k;note.versus=limit;note.goalX=a.x;note.goalY=a.y;note.reason="gardeners left behind";c.convoyNote=t?t:1;ops.report(Event::Convoy,note);
-  c.waitSince=0;c.waited=0;c.gap=gapOf(gs,a.x,a.y);
-  /* r32 review: every gardener left behind on a march: never on without them (as when all died); the target is
-     avoided only once the army has left home (stragglers at home say nothing about the target). */
-  if(gs.empty()){if(c.phase==Phase::March&&!c.hunting&&!c.escort){if(c.target.id&&(!hs.ok||distance(a.x,a.y,hs.homeX,hs.homeY)>GatherHome)){avoid(c,c.target.uid,t,LostAvoid);c.reason="gardeners left behind";ops.report(Event::Avoid,c);}startReturn(c,t,ops,m,"gardeners left behind");}return true;}}
- c.waitSince=0;c.waited=0;
- long gx=0,gy=0;for(auto&g:gs){gx+=g.x;gy+=g.y;}int rear=std::max(distance(a.x,a.y,dx,dy),distance((int)(gx/(long)gs.size()),(int)(gy/(long)gs.size()),dx,dy)); /* the rear group: the army or its gardeners' centre */
- int cx=0,cy=0,bx=0,by=0;along(ox,oy,dx,dy,rear-ConvoyLead,cx,cy);along(ox,oy,dx,dy,rear-ConvoyLead+ConvoyBehind,bx,by);
- /* r32 review: the army goes to its next point only along a clear leg, else straight to (dx,dy) along a clear leg. */
- if(f.on&&!legClear(a.x,a.y,cx,cy,f,legKeep(n))){if(!legClear(a.x,a.y,dx,dy,f,legKeep(n)))return false;cx=dx;cy=dy;}
- if(!closer(cx,cy,f,soldierKeep(n))&&(distance(cx,cy,c.goalX,c.goalY)>=2||!c.orderAt||t-c.lastOrder>=2*ReorderEvery))send(c,t,ops,m,cx,cy,home);
- gather(c,t,ops,gs,f,bx,by);
+ std::vector<Gardener> gs;living(c,ops,gs);strays(c,ops,gs);c.convoyAt=t?t:1;c.gap=0;
+ if(!m.empty()){std::vector<Soldier> core;Army a=body(m,&core);int n=groupSize(c,m);if(!gs.empty())c.gap=spanOf(gs,core);
+  /* An army near the fire (leaving it by its exit leg) goes straight to (dx,dy), re-sent every GuardResend. */
+  bool hot=f.on&&closer(a.x,a.y,f,soldierKeep(n));int cx=dx,cy=dy;
+  /* r33: a leg end on unwalkable land (water: the group order's walk-sector test refuses it, ORDER_IGNORED) moves to the nearest standable cell. */
+  if(!ops.stand(c,cx,cy,1)){for(int r=1;r<=SnapRing;r++){bool ok=false;for(int qy=-r;qy<=r&&!ok;qy++)for(int qx=-r;qx<=r&&!ok;qx++){int px=dx+qx,py=dy+qy;if(distance(dx,dy,px,py)==r&&ops.stand(c,px,py,1)&&!closer(px,py,f,soldierKeep(n))){cx=px;cy=py;ok=true;}}if(ok)break;}}
+  if(f.on&&!hot&&!legClear(a.x,a.y,cx,cy,f,legKeep(n)))return false;
+  if((hot||!closer(cx,cy,f,soldierKeep(n)))&&(distance(cx,cy,c.goalX,c.goalY)>=2||!c.orderAt||t-c.lastOrder>=(hot?GuardResend:2*ReorderEvery)))send(c,t,ops,m,cx,cy,home);}
+ if(!gs.empty())follow(c,t,ops,gs,f,ox,oy,dx,dy); /* the army gone: the gardeners walk on */
  return true;
+}
+// r35: the army at its staging cell waits for its gardeners (together()) at most StageWait ticks, then goes on without
+// the stragglers (they follow to the rear point). waitSince/waited count from the first look there.
+template<class Ops> bool gathered(Campaign&c,uint32_t t,Ops&ops,const std::vector<Soldier>&m){
+ if(together(c,ops,m)){c.waitSince=0;c.waited=0;return true;}
+ if(!c.waitSince)c.waitSince=t?t:1;c.waited=std::max<uint32_t>(1,t-c.waitSince);
+ bool go=c.waited>=StageWait;
+ if(go||!c.convoyNote||t-c.convoyNote>=ConvoyNote){c.convoyNote=t?t:1;Army a=body(m);Campaign note=c;note.value=0;note.versus=convoyLimit(c.gardeners);note.goalX=a.x;note.goalY=a.y;note.reason=go?"assault before the gardeners":"waiting for gardeners";ops.report(Event::Convoy,note);}
+ if(go){c.waitSince=0;c.waited=0;}
+ return go;
 }
 // The army and its gardeners on to (x,y): a convoy step, or a plain order without gardeners.
 template<class Ops> void advance(Campaign&c,uint32_t t,Ops&ops,const std::vector<Soldier>&m,const Fire&f,int x,int y,bool home){
- if(!convoying(c)){if(!m.empty())send(c,t,ops,m,x,y,home);if(!c.rally)follow(c,t,ops,x,y);return;}
+ if(!convoying(c)){if(!m.empty())send(c,t,ops,m,x,y,home);return;} /* r33: no gardeners walk without the convoy (a hunt holds none) */
  int ox=0,oy=0;legFrom(c,ox,oy);if(!convoy(c,t,ops,m,f,ox,oy,x,y,home))c.replanAt=t+Period;
 }
 // The way home from (fx,fy) for the army and its gardeners: routed around the fire (plan()). Without
@@ -555,7 +678,7 @@ template<class Ops> void homeward(Campaign&c,uint32_t t,Ops&ops,const std::vecto
  auto stand=[&](int x,int y,int pass){return ops.stand(c,x,y,pass);};
  if(plan(c,f,fx,fy,s.homeX,s.homeY,groupSize(c,m),stand)){c.homeless=false;int x=walking(c)?c.vx[0]:s.homeX,y=walking(c)?c.vy[0]:s.homeY;advance(c,t,ops,m,f,x,y,true);return;} /* r32: home as a convoy */
  bool first=!c.homeless;c.homeless=true;c.retryAt=t+RetryPlan;c.lastOrder=t;int x=-1,y=-1;
- if(walking(c)){x=c.vx[0];y=c.vy[0];if(!m.empty())send(c,t,ops,m,x,y,true);follow(c,t,ops,x,y);}
+ if(walking(c)){x=c.vx[0];y=c.vy[0];if(!m.empty())send(c,t,ops,m,x,y,true);std::vector<Gardener> gs;living(c,ops,gs);if(!gs.empty())gather(c,t,ops,gs,f,x,y);} /* r33: parked with the army */
  c.vias=0;c.viaAt=0;
  if(first){Campaign note=c;note.value=(int)m.size();note.versus=0;note.goalX=x;note.goalY=y;note.reason="no way home outside the fire defence, holding";ops.report(Event::Fire,note);}
 }
@@ -566,7 +689,9 @@ template<class Ops> void homeward(Campaign&c,uint32_t t,Ops&ops,const std::vecto
 }
 // Home, around the fire (homeward()).
 template<class Ops> void startReturn(Campaign&c,uint32_t t,Ops&ops,const std::vector<Soldier>&m,const char*why){
- c.reason=why;c.phase=Phase::Return;c.since=t;c.vias=0;c.viaAt=0;c.split=false;c.hunting=false;c.rally=false;c.waitSince=0;c.waited=0;c.replanAt=0;c.homeless=false;Strength s=ops.strength(c);ops.report(Event::Return,c);
+ c.reason=why;c.phase=Phase::Return;c.since=t;c.vias=0;c.viaAt=0;c.split=false;c.hunting=false;c.waitSince=0;c.waited=0;c.replanAt=0;c.homeless=false;Strength s=ops.strength(c);
+ if(c.style==Style::Defend)ops.report(Event::Defend,c); /* r33: OFFENCE_DEFEND end (phase 3, the reason) */
+ ops.report(Event::Return,c);
  if(!s.ok)return;
  std::vector<Target> all;ops.targets(c,all);Fire f=fire(c,ops,all);homeward(c,t,ops,m,f,s);
 }
@@ -619,23 +744,23 @@ template<class Ops> void rearGuard(Campaign&c,uint32_t t,Ops&ops,const Fire&f,in
  int rx=x,ry=y;rearPoint(c,ops,f,x,y,fx,fy,th,tx,ty,rx,ry);
  c.rearX=rx;c.rearY=ry;if(!c.gardeners)return;std::vector<Gardener> gs;living(c,ops,gs);
  int reach0=th?distance(x,y,tx,ty):0;
- gather(c,t,ops,gs,f,rx,ry,[&](int i,const Gardener&g){return c.gcx[i]<0&&g.work!=Work::Working;},[&](int px,int py){return !th||distance(px,py,tx,ty)>reach0;});
+ gather(c,t,ops,gs,f,rx,ry,[&](int i,const Gardener&){return c.gcx[i]<0;},[&](int px,int py){return !th||distance(px,py,tx,ty)>reach0;}); /* r33: working ones too (stray Dark land) */
 }
-// March orders go to the next waypoint, then the staging cell: as a convoy with the gardeners (r32), the army
-// alone while it walks to its gardeners (rally) or hunts. A pincer's gardeners march with its first half, the
+// March orders go to the next waypoint, then the staging cell: as a convoy with the gardeners (r32; r35: one order per
+// leg, the gardeners following), the army alone while it hunts. A pincer's gardeners march with its first half, the
 // second half goes straight to its own staging cell. The assault cell keeps soldierKeep(N) while the fire is on;
 // without one the target is avoided (LostAvoid) and the army re-targets (never the door inside the fire). An
 // army facing Dark fighters near the door takes a screen cell on their side (r32); the gardeners wait behind it.
 template<class Ops> void order(Campaign&c,uint32_t t,Ops&ops,const std::vector<Soldier>&m){
  if(c.phase==Phase::March){
   if(c.split){
-   if(!convoying(c)){sendSplit(c,t,ops,m,c.stageX,c.stageY,c.stage2X,c.stage2Y);follow(c,t,ops,c.stageX,c.stageY);return;}
+   if(!convoying(c)){sendSplit(c,t,ops,m,c.stageX,c.stageY,c.stage2X,c.stage2Y);return;}
    std::vector<Soldier> a,b;halves(m,a,b);
    if(!b.empty()&&(c.goal2X!=c.stage2X||c.goal2Y!=c.stage2Y||!c.flankAt||t-c.flankAt>=2*ReorderEvery)){c.goal2X=c.stage2X;c.goal2Y=c.stage2Y;c.flankAt=t?t:1;ops.move(c,b,c.stage2X,c.stage2Y,false);}
    std::vector<Target> all;ops.targets(c,all);Fire f=fire(c,ops,all);
    if(!convoy(c,t,ops,a.empty()?b:a,f,c.legX,c.legY,c.stageX,c.stageY,false))c.replanAt=t+Period;return;}
   int x=walking(c)?c.vx[c.viaAt]:c.stageX,y=walking(c)?c.vy[c.viaAt]:c.stageY;
-  if(!convoying(c)){send(c,t,ops,m,x,y,false);return;} /* hunting, a rally, or no gardeners */
+  if(!convoying(c)){send(c,t,ops,m,x,y,false);return;} /* hunting, or no gardeners */
   std::vector<Target> all;ops.targets(c,all);Fire f=fire(c,ops,all);int ox=0,oy=0;legFrom(c,ox,oy);
   if(!convoy(c,t,ops,m,f,ox,oy,x,y,false))c.replanAt=t+Period;return;}
  if(!c.target.id){send(c,t,ops,m,c.target.doorX,c.target.doorY,false);return;} /* hunted group */
@@ -646,6 +771,7 @@ template<class Ops> void order(Campaign&c,uint32_t t,Ops&ops,const std::vector<S
  if(c.split){std::vector<Soldier> h,k;halves(m,h,k);ok=spot(c.stageX,c.stageY,std::max(1,(int)h.size()),x,y)&&spot(c.stage2X,c.stage2Y,std::max(1,(int)k.size()),x2,y2);}
  else{int n=std::max(1,(int)m.size());ok=(th&&screenPoint(c.target,f,tx,ty,n,[&](int px,int py){return ops.spare(c.target,px,py);},x,y))||spot(a.x,a.y,n,x,y);}
  if(!ok){avoid(c,c.target.uid,t,LostAvoid);c.reason="no safe assault cell";ops.report(Event::Avoid,c);retarget(c,t,ops,m);return;}
+ /* r35: the assault cell in one order (r33 walked a long assault leg as a convoy in ConvoyLead steps); the gardeners wait at the rear point */
  if(c.split)sendSplit(c,t,ops,m,x,y,x2,y2);else send(c,t,ops,m,x,y,false);
  rearGuard(c,t,ops,f,x,y,a.x,a.y,th,tx,ty); /* r32 review: behind the screen, away from the threat */
 }
@@ -656,15 +782,9 @@ template<class Ops> void order(Campaign&c,uint32_t t,Ops&ops,const std::vector<S
 // and no safe approach exists the target is avoided and the army goes home.
 template<class Ops> bool approach(Campaign&c,uint32_t t,Ops&ops,const std::vector<Soldier>&m,const std::vector<Target>&all,int fromX,int fromY){
  auto stand=[&](int x,int y,int pass){return ops.stand(c,x,y,pass);};int sx=0,sy=0;Army a=summary(m);Fire f=fire(c,ops,all);int n=groupSize(c,m);
- bool pincer=c.split;c.split=false;c.vias=0;c.viaAt=0;c.replanAt=0;c.since=t;c.progressAt=t;c.greenSince=0;c.ringDark=-1;c.razed=false;c.holding=false;c.rally=false;c.waitSince=0;c.waited=0;c.rearX=c.rearY=-1;c.flankAt=0;c.legX=a.x;c.legY=a.y;
+ bool pincer=c.split;c.split=false;c.vias=0;c.viaAt=0;c.replanAt=0;c.since=t;c.progressAt=t;c.targetHex=c.target.id?std::max(distance(fromX,fromY,c.target.doorX,c.target.doorY),c.target.path):0;c.nearX=c.nearY=-1; /* r38: the walked path when known */c.greenSince=0;c.ringDark=-1;c.razed=false;c.holding=false;c.waitSince=0;c.waited=0;c.rearX=c.rearY=-1;c.flankAt=0;c.legX=a.x;c.legY=a.y;c.ignoredOrders=0;
  resetCells(c); /* a new target: every gardener gets a cell again */
- /* r32 rally: an army in the field whose gardeners stand far away (a hunt's hand-over) walks to them first; then approach() again. */
- if(convoying(c)&&!c.escort&&c.nesting<3){std::vector<Gardener> gs;living(c,ops,gs);
-  if(!gs.empty()){long gx=0,gy=0;for(auto&g:gs){gx+=g.x;gy+=g.y;}int cx=(int)(gx/(long)gs.size()),cy=(int)(gy/(long)gs.size());Strength s=ops.strength(c);
-   if(distance(a.x,a.y,cx,cy)>RallyGap&&(!s.ok||distance(a.x,a.y,s.homeX,s.homeY)>GatherHome)){int rx=cx,ry=cy;
-    if(holdPoint(c,ops,f,cx,cy,a.x,a.y,soldierKeep(n),rx,ry)&&plan(c,f,a.x,a.y,rx,ry,n,stand)){c.rally=true;c.split=false;c.phase=Phase::March;c.stageX=rx;c.stageY=ry;
-     Campaign note=c;note.gap=distance(a.x,a.y,cx,cy);note.value=0;note.versus=RallyGap;note.goalX=rx;note.goalY=ry;note.reason="rally to the gardeners";c.convoyNote=t?t:1;ops.report(Event::Convoy,note);order(c,t,ops,m);return true;}
-    c.vias=0;c.viaAt=0;}}}
+ /* r35: no rally: an army in the field whose gardeners stand far away (a hunt's hand-over) marches on, they follow its legs. */
  if(pincer&&c.target.id){int half=std::max((a.count+1)/2,std::max(1,c.gardeners)),leg=legKeep(half),lx=0,ly=0,rx=0,ry=0,ax=0,ay=0,bx=0,by=0;
   turn(c.target.doorX,c.target.doorY,fromX,fromY,PincerAngle,lx,ly);turn(c.target.doorX,c.target.doorY,fromX,fromY,-PincerAngle,rx,ry);
   if(stagePoint(c.target,f,lx,ly,StageDistance,half,stand,ax,ay)&&stagePoint(c.target,f,rx,ry,StageDistance,half,stand,bx,by)&&distance(ax,ay,bx,by)>=PincerGap&&legClear(a.x,a.y,ax,ay,f,leg)&&legClear(a.x,a.y,bx,by,f,leg)){
@@ -672,7 +792,7 @@ template<class Ops> bool approach(Campaign&c,uint32_t t,Ops&ops,const std::vecto
   if(c.style==Style::Pincer)c.style=Style::Assault; /* no room for two flanks: one army */
  }
  bool legOk=legClear(a.x,a.y,c.target.doorX,c.target.doorY,f,legKeep(std::max(1,a.count)));
- bool direct=distance(a.x,a.y,c.target.doorX,c.target.doorY)<=AssaultDistance&&legOk&&together(c,ops,m),staged=false; /* r32: scattered gardeners: march (gather) first */
+ bool direct=distance(a.x,a.y,c.target.doorX,c.target.doorY)<=AssaultDistance&&legOk&&together(c,ops,m),staged=false; /* r32: scattered gardeners: march first (r35: the staging cell waits for them at most StageWait) */
  if(!direct&&stagePoint(c.target,f,fromX,fromY,StageDistance,n,stand,sx,sy)){
   if(plan(c,f,a.x,a.y,sx,sy,n,stand)){staged=true;c.phase=Phase::March;c.stageX=sx;c.stageY=sy;ops.report(Event::Stage,c);}
   else c.vias=0;
@@ -681,7 +801,7 @@ template<class Ops> bool approach(Campaign&c,uint32_t t,Ops&ops,const std::vecto
   if(!direct&&f.on&&!legOk){avoid(c,c.target.uid,t);c.reason="no way outside the fire defence";ops.report(Event::Avoid,c);startReturn(c,t,ops,m,"no way outside the fire defence");return false;}
   c.phase=Phase::Assault;ops.report(Event::Assault,c);
  }
- if(c.phase==Phase::Assault&&c.style==Style::Sweep&&!c.target.id){c.lastOrder=0;return true;} /* sweep() places the escort */
+ if(c.phase==Phase::Assault&&(c.style==Style::Sweep||c.style==Style::Defend)&&!c.target.id){c.lastOrder=0;return true;} /* sweep()/hold() place the escort */
  order(c,t,ops,m);return c.phase!=Phase::Return&&c.phase!=Phase::Idle;
 }
 // A sweep goes back to its front (after a building there fell or timed out).
@@ -697,12 +817,13 @@ template<class Ops> bool retarget(Campaign&c,uint32_t t,Ops&ops,const std::vecto
  if(c.style==Style::Raid&&c.chain>=RaidChain){startReturn(c,t,ops,m,"raid done");return false;}
  if(c.nesting>=3){startReturn(c,t,ops,m,"no safe target");return false;} /* order() -> retarget() -> approach() -> order() */
  std::vector<Target> all;ops.targets(c,all);Fire f=fire(c,ops,all);Army a=summary(m);Config cfg=ops.config(c.player);
+ ops.paths(c,a.x,a.y,all); /* r37: the next target by the walk from where the army stands */
  Pick pick;pick.citadel=true;pick.limit=defenceLimit(cfg,a.weight);pick.weakest=!light(c);
  int i=chooseTarget(all,f,a.x,a.y,pick,&c,t);
  if(c.style==Style::Sweep&&(i<0||distance(all[i].x,all[i].y,c.frontX,c.frontY)>SweepTarget)){resume(c,t);return true;} /* a sweep stays on its front */
  if(i<0){startReturn(c,t,ops,m,c.style==Style::Hunt?"hunt over":light(c)?"raid found no weak target":"no target left");return false;}
  c.target=all[i];c.targetSince=t;c.deferredSince=0;c.nextTry=0;
- if(take&&!c.gardeners){if(!c.want)c.want=gardenersFor(c.style,(int)m.size());assign(c,ops,a.x,a.y,c.want,t);if(!c.gardeners){startReturn(c,t,ops,m,c.style==Style::Hunt?"hunt over":"no gardeners left");return false;}} /* r32: nearest the army; approach() walks the army to them */
+ if(take&&!c.gardeners){if(!c.want)c.want=gardenersFor(c.style,(int)m.size());assign(c,ops,a.x,a.y,c.want,t,[&](const Gardener&g){return distance(g.x,g.y,a.x,a.y)<=PickReach;});if(!c.gardeners){startReturn(c,t,ops,m,c.style==Style::Hunt?"hunt over":"no gardeners left");return false;}} /* r32: nearest the army; approach() walks the army to them; r33: within PickReach (farther ones: home, the next convoy) */
  c.nesting++;bool ok=approach(c,t,ops,m,all,a.x,a.y);c.nesting--;return ok;
 }
 // A situation the style choice weighs (one entry per style).
@@ -722,21 +843,143 @@ template<class Ops> void keeps(const Campaign&c,Ops&ops,const std::vector<Target
 }
 // Sweep fronts keep FrontKeep from each live centre (the gardeners green SweepRadius around them).
 inline void frontKeeps(const Fire&f,std::vector<Keep>&keep){if(f.on)for(auto&z:f.z)keep.push_back({z.x,z.y,FrontKeep,true});}
+// r33 defence (user, 2026-10-19: when the Dark land spreads into their territory the computers should defend it and
+// reclaim it first; field pid 13612: 553 -> 5,805 owned Dark cells while their soldiers stood idle). The native agents
+// never treat Dark units as intruders (CAIAgentIntruderCombat's type table 0xBF0438 = 46, 48, 49, 47, 50, 45) and an
+// idle soldier's own search reaches 13 tiles only, so the director leads the defence: a 'defend' campaign takes
+// soldiers to the intrusion (next to the nearest group of Dark units: computer soldiers attack Dark Gardeners, Warriors,
+// Throwers and Shamans on their own once within about 13 tiles; Mushroom Farmers, slaves and servants never), its
+// gardeners follow parked behind (convoy) and green the Dark land of the player's own territory near the army, area by
+// area, while the soldiers screen them.
+// Threat (assess): units = Dark Gardeners and Dark fighters in or within 4 of the territory (none within HuntKeep of a
+// live fire: never chased into the fire), own = Dark cells the player owns, rise = their growth in one scan pass. Any: a
+// unit, or own >= DefendCells. Serious: own >= SeriousCells, rise >= SeriousRise, a Dark fighter within SeriousHome of
+// home, or SeriousGardeners Dark Gardeners. A serious one recalls a running attack (answer(): not a siege whose ring is
+// two thirds green, at most every RecallGap ticks); a minor one is defended by an idle sector when the last campaign was
+// not a defence (attacks come between) or 4*DefendRest after it; otherwise free gardeners reclaim (reclaim()).
+// Size: the larger of DefendMin and a quarter (serious: half) of the army, more until its weight is twice the Dark
+// fighters' (2 each); the home reserve stays; no defence when even the whole army is lighter than the Dark fighters.
+// Gardeners: base 6 + soldiers/GardenerPer + own/DefendPerGardener, at most gardenersWanted(free soldiers), only from
+// within LaunchReach of home. In place (hold()), every DefendLook ticks: Dark fighters within ThreatRadius heavier than
+// the army: home ("threat too strong"); the soldiers stand next to the nearest group of Dark units within DefendReach of
+// the area, else beside own Dark land near the army; no own Dark land within EscortRadius and no units: the next area
+// (the own Dark cell nearest the area), none left: home ("land clean"); DefendTime ends it. Gardeners get own Dark cells
+// within EscortRadius of the army body (never within DefendDanger of a Dark fighter, GardenerKeep from the fire), the
+// others wait parked behind the army, away from the units; longer moves are convoy steps.
+constexpr int DefendCells=24,SeriousCells=150,SeriousRise=40,SeriousHome=40,SeriousGardeners=3,DefendMin=6,DefendReach=30,DefendDanger=4,DefendPerPass=8,DefendPerGardener=100;
+constexpr uint32_t DefendLook=40,DefendTime=6000,DefendRest=1500,DefendPause=300,RecallGap=3000,DefendNote=3000;
+// r37 (field, The Alliance: the computers own thousands of Dark cells from the map start, so every decision began a
+// 6,000-tick "serious intrusion" land defence and 3 attacks came in 112,000 ticks): a threat of land alone never comes
+// before an attack. While an attack is possible it is deferred until LandDefendGap after the last one, and a land-only
+// defence takes an escort (escortSize) for at most LandDefendTime; only Dark fighters in the territory recall a running
+// attack (answer()).
+constexpr uint32_t LandDefendGap=12000,LandDefendTime=3000;
+// r33 review: land = a reclaimable own Dark cell exists (outside every keep and FrontKeep, workable, in the sector's
+// region). The owned-cell count includes cells in the keeps around the Dark base that no gardener may green; it makes an
+// intrusion serious (and adds defence gardeners) only while such a cell exists, else such land kept every intrusion
+// serious and attacks never came again.
+struct Threat {bool any=false,serious=false,land=false;int x=-1,y=-1,units=0,fighters=0,gardeners=0,own=0,rise=0;};
+template<class Ops> Threat assess(const Campaign&c,Ops&ops,const Fire&f,const Strength&s,const std::vector<Target>&all){
+ Threat th;Intrusion in;ops.intrusion(c,in);th.own=in.own;th.rise=in.rise;std::vector<std::pair<int,int>> units;int close=0;
+ for(auto&p:in.fighters)if(!closer(p.first,p.second,f,HuntKeep)){units.push_back(p);th.fighters++;if(distance(p.first,p.second,s.homeX,s.homeY)<=SeriousHome)close++;}
+ for(auto&p:in.gardeners)if(!closer(p.first,p.second,f,HuntKeep)){units.push_back(p);th.gardeners++;}
+ th.units=(int)units.size();int n=0,lx=-1,ly=-1;
+ if(in.own>0){std::vector<Keep> keep;keeps(c,ops,all,f,keep);frontKeeps(f,keep);int dx=0,dy=0;if(ops.ownDark(c,s.homeX,s.homeY,OwnRadius,keep,dx,dy)&&ops.reach(c,dx,dy)){th.land=true;lx=dx;ly=dy;}}
+ if(!units.empty())cluster(units,f,s.homeX,s.homeY,th.x,th.y,n);
+ else if(th.land&&in.own>=DefendCells){th.x=lx;th.y=ly;}
+ th.any=th.x>=0&&ops.reach(c,th.x,th.y);
+ th.serious=th.any&&((th.land&&(in.own>=SeriousCells||in.rise>=SeriousRise))||close>0||th.gardeners>=SeriousGardeners);
+ return th;
+}
+// Defence gardeners for the reclaimable own land (r33 review: none for land no gardener may green).
+inline int landGardeners(const Threat&th){return th.land?th.own/DefendPerGardener:0;}
+inline void noteThreat(Campaign&c,const Threat&th){c.threatUnits=th.units;c.threatFighters=th.fighters;c.threatOwn=th.own;c.threatRise=th.rise;}
+// OFFENCE_DEFEND for a declined defence: on a new reason, then every DefendNote ticks.
+template<class Ops> void defendNote(Campaign&c,uint32_t t,Ops&ops,const Threat&th,const char*why){
+ if(why==c.defendWhy&&c.defendNote&&t-c.defendNote<DefendNote)return;c.defendWhy=why;c.defendNote=t?t:1;
+ Campaign note=c;noteThreat(note,th);note.frontX=th.x;note.frontY=th.y;note.reason=why;ops.report(Event::Defend,note);
+}
+// Soldiers for a defence of a threat: nearest to it first (free must be sorted so); returns how many, 0 = too strong.
+inline int defendSize(const std::vector<Soldier>&free,int army,const Threat&th){
+ int take=std::min(army,std::max(DefendMin,th.serious?army/2:army/4)),w=0,dark=2*th.fighters;for(int k=0;k<take;k++)w+=soldierWeight(free[k].type);
+ while(take<army&&w<2*dark){w+=soldierWeight(free[take].type);take++;}
+ return w<dark?0:take;
+}
+// r37: whether the sector could launch an attack (a reachable building target and a spare army; before firstAttack too,
+// so the land waits for the first attack instead of delaying it).
+template<class Ops> bool attackable(Campaign&c,uint32_t t,Ops&ops,const Strength&s,const std::vector<Target>&all,const Fire&f){
+ Config cfg=ops.config(c.player);if(!cfg.ok||cfg.mode<=0)return false;
+ std::vector<Soldier> free;ops.available(c,s.homeX,s.homeY,free);int avail=(int)free.size();if(avail-std::max(HomeReserve,avail/6)<MinArmy)return false;
+ return chooseTarget(all,f,s.homeX,s.homeY,Pick{},&c,t)>=0;
+}
+// An idle sector defends its land (before any attack decision). True when a defence was launched.
+template<class Ops> bool defend(Campaign&c,uint32_t t,Ops&ops){
+ if(t<ReclaimStart||(c.lookAt&&t-c.lookAt<DefendLook))return false;c.lookAt=t?t:1;
+ Strength s=ops.strength(c);if(!s.ok)return false;
+ std::vector<Target> all;ops.targets(c,all);Fire f=fire(c,ops,all);Threat th=assess(c,ops,f,s,all);
+ if(!th.any)return false;
+ if(c.defendEnd&&t-c.defendEnd<(th.serious?DefendPause:DefendRest))return false; /* a breather after a defence */
+ if(!th.serious&&(t<c.cooldownUntil||(c.lastStyle==Style::Defend&&c.defendEnd&&t-c.defendEnd<4*DefendRest)))return false; /* minor: attacks come between */
+ bool landOnly=!th.units;
+ if(landOnly&&attackable(c,t,ops,s,all,f)){Config cfg=ops.config(c.player);uint32_t since=c.landDefendAt?c.landDefendAt:firstAttack(cfg.delay);
+  if(t<since+LandDefendGap){defendNote(c,t,ops,th,"deferred: attacks first");return false;}} /* r37 */
+ /* r33 review: a threat of land only needs gardeners, at home (LaunchReach) or near the area (hold() adopts those on
+    arrival); without any the army marched out, found no gardener and went home, again every DefendPause. */
+ if(!th.units){int g=0;std::vector<Gardener> gf;ops.gardeners(c,gf);for(auto&q:gf)if(!benched(c,q.id,q.uid,t)&&(distance(q.x,q.y,s.homeX,s.homeY)<=LaunchReach||distance(q.x,q.y,th.x,th.y)<=PickReach))g++;
+  if(!g){defendNote(c,t,ops,th,"declined: no gardeners");return false;}}
+ std::vector<Soldier> free;ops.available(c,th.x,th.y,free);int avail=(int)free.size(),army=avail-std::max(HomeReserve,avail/6);
+ if(army<DefendMin){defendNote(c,t,ops,th,"declined: no spare soldiers");return false;}
+ int take=landOnly?std::max(1,std::min(army,escortSize(army))):defendSize(free,army,th);if(!take){defendNote(c,t,ops,th,"declined: threat too strong");return false;} /* r37: land alone needs an escort only */
+ free.resize(take);Style last=c.style;c.landOnly=landOnly;if(landOnly)c.landDefendAt=t?t:1;
+ c.style=Style::Defend;c.raid=false;c.split=false;c.hunting=false;c.escort=false;c.chain=0;c.quietSince=0;c.lastFollow=0;c.lures=0;c.vias=0;c.viaAt=0;
+ c.target=Target{};c.target.doorX=c.frontX=th.x;c.target.doorY=c.frontY=th.y;c.frontSince=t;
+ int got=ops.raise(c,free);if(got<=0){c.style=last;defendNote(c,t,ops,th,"declined: squad not created");return false;}
+ c.gardeners=0;c.want=std::min(gardenersWanted(avail),gardenerBase(Style::Defend)+take/GardenerPer+landGardeners(th));
+ assign(c,ops,s.homeX,s.homeY,c.want,t,[&](const Gardener&g){return distance(g.x,g.y,s.homeX,s.homeY)<=LaunchReach;});
+ c.initial=(uint16_t)got;c.started=t;c.targetSince=t;c.deferredSince=0;c.nextTry=0;c.lastStyle=Style::Defend;noteThreat(c,th);
+ c.reason=th.serious?"start: serious intrusion":"start: intrusion";c.defendWhy=c.reason;c.defendNote=t?t:1;ops.report(Event::Defend,c);
+ std::vector<Soldier> m;if(!ops.members(c,m)){c.reason="squad vanished";ops.report(Event::Lost,c);toIdle(c,t);return true;}
+ approach(c,t,ops,m,all,s.homeX,s.homeY);return true;
+}
+// A running attack (march or siege) recalled by a serious intrusion: the same army and gardeners turn to the defence.
+template<class Ops> bool answer(Campaign&c,uint32_t t,Ops&ops,const std::vector<Soldier>&m){
+ if(c.style==Style::Defend||(c.phase!=Phase::March&&c.phase!=Phase::Assault)||m.empty()||t<ReclaimStart||(c.lookAt&&t-c.lookAt<DefendLook)||(c.recallAt&&t-c.recallAt<RecallGap))return false;c.lookAt=t?t:1;
+ Strength s=ops.strength(c);if(!s.ok)return false;std::vector<Target> all;ops.targets(c,all);Fire f=fire(c,ops,all);Threat th=assess(c,ops,f,s,all);
+ if(!th.serious)return false;
+ if(!th.fighters)return false; /* r37: only Dark fighters in the territory recall an attack (land and Dark Gardeners wait for the next defence) */
+ if(!th.units&&!c.gardeners)return false; /* r33 review: land only and no gardeners (an allied escort): nothing to defend with */
+ if(c.phase==Phase::Assault&&c.target.id&&c.ringDark>=0&&c.ringSize>0&&c.ringDark*3<=c.ringSize)return false; /* two thirds green: the siege first */
+ Army a=body(m);if(summary(m).weight<2*th.fighters){defendNote(c,t,ops,th,"recall declined: threat too strong");return false;}
+ c.recallAt=t?t:1;c.style=Style::Defend;c.landOnly=false;c.raid=false;c.split=false;c.hunting=false;c.escort=false;c.chain=0;c.lastFollow=0;c.quietSince=0;c.lures=0;
+ c.target=Target{};c.target.doorX=c.frontX=th.x;c.target.doorY=c.frontY=th.y;c.frontSince=t;c.started=t;c.targetSince=t;c.lastStyle=Style::Defend;
+ c.want=std::max(c.want,std::min(MaxGardeners,gardenerBase(Style::Defend)+(int)m.size()/GardenerPer+landGardeners(th)));
+ noteThreat(c,th);c.reason="recall: serious intrusion";c.defendWhy=c.reason;c.defendNote=t?t:1;ops.report(Event::Defend,c);
+ c.nesting++;approach(c,t,ops,m,all,a.x,a.y);c.nesting--;return true;
+}
+// The defence in place (phase Assault of a 'defend' campaign).
+template<class Ops> void hold(Campaign&c,uint32_t t,Ops&ops,const std::vector<Soldier>&m);
 template<class Ops> void decide(Campaign&c,uint32_t t,Ops&ops){
  Config cfg=ops.config(c.player);
+ if(cfg.ok&&defend(c,t,ops))return; /* r33: the own land first */
  if(!cfg.ok||cfg.mode<=0||t<=c.nextCheck||t<firstAttack(cfg.delay)||t<c.cooldownUntil)return;
  // F and Str are zeroed by the attack agent's reset (load, end of a native
  // attack) until CAIAgentSquads writes them again: not known yet, no failure.
  Strength s=ops.strength(c);if(s.ok&&!s.fighters&&!s.strength){c.nextCheck=t+UnknownRetry;return;}
  if(!s.ok){decline(c,t,ops,"no sector");return;}
- std::vector<Target> all;ops.targets(c,all);Fire f=fire(c,ops,all);
+ std::vector<Target> all;ops.targets(c,all);Fire f=fire(c,ops,all);ops.paths(c,s.homeX,s.homeY,all); /* r37: targets by the walk from home */
  // Another computer called for an assault: join it without waiting for chance (never a target the fire now locks).
  Target call;bool allied=ops.call(c,t,call)&&call.uid!=c.joinedUid;
  if(allied){allied=false;for(auto&b:all)if(b.id==call.id&&b.uid==call.uid&&b.reachable&&!locked(b,f)){call=b;allied=true;}}
- if(!allied&&c.random.bits16()>=c.chance){decline(c,t,ops,"chance");return;}
  std::vector<Soldier> free;ops.available(c,s.homeX,s.homeY,free);int avail=(int)free.size(),army=avail-std::max(HomeReserve,avail/6);
  if(army<MinArmy){c.value=avail;decline(c,t,ops,"no spare soldiers");return;}
- std::vector<Gardener> spare;ops.gardeners(c,spare);int gfree=0;for(auto&g:spare)if(!benched(c,g.id,g.uid,t))gfree++;
+ if(!allied&&army<AssaultMin&&c.random.bits16()>=c.chance){decline(c,t,ops,"chance");return;} /* r37: an army fit for an assault never waits for chance */
+ std::vector<Gardener> spare;ops.gardeners(c,spare);int gfree=0;auto mustering=[&](const Gardener&g){return distance(g.x,g.y,s.homeX,s.homeY)<=LaunchReach;}; /* r33: the army musters at home */
+ for(auto&g:spare)if(!benched(c,g.id,g.uid,t)&&mustering(g))gfree++;
+ if(gfree<MinGardeners&&(!c.callHomeAt||t-c.callHomeAt>=CallHomeEvery)){ /* r37: gardeners stranded beyond LaunchReach (greening the Dark border where a campaign dropped them; field: 14 alive, 46,000 ticks of "no gardeners") walk home, the nearest first */
+  std::vector<const Gardener*> away;for(auto&g:spare)if(!benched(c,g.id,g.uid,t)&&!mustering(g))away.push_back(&g);
+  std::sort(away.begin(),away.end(),[&](const Gardener*a,const Gardener*b){return distance(a->x,a->y,s.homeX,s.homeY)<distance(b->x,b->y,s.homeX,s.homeY);});
+  int called=0;for(auto*g:away){if(called>=CallHome)break;if(inFire(g->x,g->y,f)||!legClear(g->x,g->y,s.homeX,s.homeY,f,GardenerKeep))continue;ops.sendGardener(c,*g,s.homeX,s.homeY);called++;}
+  if(called){c.callHomeAt=t?t:1;Campaign note=c;note.value=called;note.versus=(int)away.size();note.goalX=s.homeX;note.goalY=s.homeY;note.reason="gardeners called home";ops.report(Event::Reclaim,note);}}
  int cap=gardenersWanted(avail);auto wantOf=[&](Style st,int take){return std::min(cap,gardenersFor(st,take));}; /* r32: gardeners grow with the soldiers a style takes */
  auto weightOf=[&](int n){int w=0;for(int k=0;k<n&&k<avail;k++)w+=soldierWeight(free[k].type);return w;};
  c.value=cfg.thresholdTotal>0?(int)((int64_t)s.strength*100/cfg.thresholdTotal):s.strength;c.versus=s.darkValue;
@@ -754,13 +997,14 @@ template<class Ops> void decide(Campaign&c,uint32_t t,Ops&ops){
   {Option&p=o[n++];p.style=Style::Pincer;p.take=army;p.want=wantOf(Style::Pincer,army);p.target=main;if(main>=0&&army>=PincerMin)p.weight=3;}
   // Sweep: an escort and many gardeners push into the nearest Dark land (fronts outside FrontKeep).
   {Option&w=o[n++];w.style=Style::Sweep;w.take=escortSize(army);w.want=wantOf(Style::Sweep,w.take);std::vector<Keep> keep;keeps(c,ops,all,f,keep);frontKeeps(f,keep);
-   if(gfree>=SweepGardeners&&ops.darkNear(c,s.homeX,s.homeY,SweepSearch,keep,fx,fy))w.weight=3+(any<0?2:0);}
+   if(gfree>=SweepGardeners&&ops.darkNear(c,s.homeX,s.homeY,SweepSearch,keep,fx,fy))w.weight=any<0?5:1;} /* r37: buildings first */
   // Hunt: the army goes for the largest group of Dark fighters well outside the fire.
   {Option&h=o[n++];h.style=Style::Hunt;h.take=huntSize(army);h.want=wantOf(Style::Hunt,h.take);std::vector<std::pair<int,int>> fs;ops.darkFighters(c,fs);
-   if(cluster(fs,f,s.homeX,s.homeY,hx,hy,hn)&&hn>=HuntMin&&ops.reach(c,hx,hy)&&weightOf(h.take)>=3*hn&&legClear(s.homeX,s.homeY,hx,hy,f,legKeep(h.take))){h.weight=2+(distance(hx,hy,s.homeX,s.homeY)<=50?2:0);h.target=-3;}}
+   if(cluster(fs,f,s.homeX,s.homeY,hx,hy,hn)&&hn>=HuntMin&&ops.reach(c,hx,hy)&&weightOf(h.take)>=3*hn&&legClear(s.homeX,s.homeY,hx,hy,f,legKeep(h.take))){h.weight=any>=0?1:2+(distance(hx,hy,s.homeX,s.homeY)<=50?2:0);h.target=-3;}} /* r37: buildings first (field: five hunts in a row, two lost to the fire) */
  }
  int k=chooseStyle(c,o,n);
- if(k<0){decline(c,t,ops,gfree<MinGardeners?"no gardeners":lockedOnly?"farms only inside the fire defence":any<0?"no reachable Dark building":"too weak for every attack");return;}
+ if(k<0){if(any<0&&(!c.targetsNote||t-c.targetsNote>=TargetsNote)){c.targetsNote=t?t:1;ops.listTargets(c,all,f,t);} /* r38: why nothing can be attacked */
+  decline(c,t,ops,gfree<MinGardeners?"no gardeners":lockedOnly?"farms only inside the fire defence":any<0?"no reachable Dark building":"too weak for every attack");return;}
  Option pick=o[k];free.resize(std::max(0,std::min(pick.take,avail)));
  c.style=pick.style;c.raid=light(c);c.split=pick.style==Style::Pincer;c.hunting=pick.style==Style::Hunt;c.escort=pick.style==Style::Allied&&!pick.want;c.chain=0;c.quietSince=0;c.lastFollow=0;c.lures=0;c.vias=0;c.viaAt=0;
  if(pick.style==Style::Allied){c.target=call;c.joinedUid=call.uid;}
@@ -768,7 +1012,7 @@ template<class Ops> void decide(Campaign&c,uint32_t t,Ops&ops){
  else if(pick.style==Style::Hunt){c.target=Target{};c.target.doorX=hx;c.target.doorY=hy;c.value=hn;}
  else{c.target=all[pick.target];if(pick.style==Style::Raid){c.versus=c.target.defence;}}
  int got=ops.raise(c,free);if(got<=0){decline(c,t,ops,"squad not created");return;}
- c.gardeners=0;c.want=pick.want;if(pick.style!=Style::Hunt)assign(c,ops,s.homeX,s.homeY,pick.want,t); /* a hunt takes its gardeners at the hand-over */
+ c.gardeners=0;c.want=pick.want;if(pick.style!=Style::Hunt)assign(c,ops,s.homeX,s.homeY,pick.want,t,mustering); /* a hunt takes its gardeners at the hand-over */
  c.initial=(uint16_t)got;c.started=t;c.targetSince=t;c.deferredSince=0;c.nextTry=0;c.lastStyle=pick.style;c.reason=styleName(pick.style);ops.report(pick.style==Style::Allied?Event::Join:Event::Launch,c);
  std::vector<Soldier> m;if(!ops.members(c,m)){c.reason="squad vanished";ops.report(Event::Lost,c);toIdle(c,t);return;}
  approach(c,t,ops,m,all,s.homeX,s.homeY);
@@ -790,6 +1034,12 @@ template<class Ops> bool sendOut(const Campaign&c,Ops&ops,const Gardener&g,const
 // entering settlers (a native collapse would leave those settlers off the map)
 // walks home. Reclaim passes are staggered by player and sector; at most
 // ReclaimPerPass searches may fail.
+// r33 (field, pid 13612: no OFFENCE_RECLAIM in 95,000 ticks while the owned Dark cells rose to 5,805): own territory is
+// searched within ReclaimRadius of the gardener and, from home, within LaunchReach of home (r33 review: farther own land,
+// such as the field's 194 hex out, is the defence campaign's: a convoy with soldiers), DefendPerPass gardeners
+// per pass while the sector defends, a pass that sends nobody says why (OFFENCE_RECLAIM value=0, every ReclaimNote
+// ticks while the player owns Dark cells), and a free gardener still parked (WATCH) beyond GatherHome of home with no
+// work and no Dark fighter within ThreatRadius is sent home (at most two per pass).
 template<class Ops> void reclaim(Campaign&c,uint32_t t,Ops&ops){
  Config cfg=ops.config(c.player);if(!cfg.ok)return;Strength s=ops.strength(c);if(!s.ok)return;
  std::vector<Gardener> gs;ops.gardeners(c,gs);if(gs.empty())return;
@@ -797,28 +1047,45 @@ template<class Ops> void reclaim(Campaign&c,uint32_t t,Ops&ops){
  std::vector<Keep> keep;bool keepReady=false;
  auto keepNow=[&](){if(keepReady)return;keepReady=true;keeps(c,ops,all,f,keep);std::vector<std::pair<int,int>> fighters;ops.darkFighters(c,fighters);for(auto&q:fighters)keep.push_back({q.first,q.second,DefenceRadius});};
  std::vector<std::pair<int,int>> parked;for(auto&b:all)if((b.kind==Temple||b.kind==Fortress)&&ops.parked(b))parked.push_back({b.x,b.y});
- int out=0,bench=0,back=0;
+ int out=0,bench=0,back=0;std::vector<Pulled> freed;
  for(auto&g:gs){
-  if(inFire(g.x,g.y,f)||(g.aimX>=0&&inFire(g.aimX,g.aimY,f))){int r=recall(c,g,t);if(!r)continue;int x=s.homeX,y=s.homeY;
+  if(inFire(g.x,g.y,f)||(g.aimX>=0&&inFire(g.aimX,g.aimY,f))){int r=recall(c,g,t);if(!r)continue;int x=s.homeX,y=s.homeY;freed.push_back(pulledOf(g,r==2,true)); /* r36 */
    if(r==1){keepNow();int dx=0,dy=0;if(ops.darkNear(c,g.x,g.y,ReclaimRadius,keep,dx,dy)){x=dx;y=dy;}}else bench++;
    if(sendOut(c,ops,g,f,x,y))out++;continue;}
   if(g.work==Work::Idle||(g.work==Work::Busy&&distance(g.centreX,g.centreY,s.homeX,s.homeY)<=2))continue;
   bool parkedBy=false;for(auto&p:parked)if(distance(g.x,g.y,p.first,p.second)<=ParkedKeep)parkedBy=true;
   if(parkedBy&&sendOut(c,ops,g,f,s.homeX,s.homeY))back++;}
  if(out){note.value=out;note.versus=bench;note.goalX=note.goalY=-1;note.reason="gardener out of the fire defence";ops.report(Event::Fire,note);}
+ if(!freed.empty()){std::vector<Soldier> none;ops.pulled(c,f,none,freed,-1,-1);}
  if(back){note.value=back;note.versus=0;note.reason="gardener called back";ops.report(Event::Reclaim,note);}
  /* Staggered by player and sector, so the computers do not all search on the same tick. */
  uint32_t phase=(uint32_t)(c.player*7+c.sector*3);if((t/Period+phase)%(ReclaimEvery/Period))return;c.lastReclaim=t;
  bool border=cfg.mode>0&&t>=ReclaimStart;keepNow();int sent=0,own=0;
  int failed=0;
  size_t start=(size_t)((t/ReclaimEvery)%gs.size());
- for(size_t k=0;k<gs.size();k++){const Gardener&g=gs[(start+k)%gs.size()];if(sent>=ReclaimPerPass||failed>=ReclaimPerPass)break;bool stuck=g.work==Work::Idle||(g.work==Work::Searching&&g.misses>SearchMisses);if(!stuck||benched(c,g.id,g.uid,t)||inFire(g.x,g.y,f))continue;
-  int dx=0,dy=0;bool mine=ops.ownDark(c,g.x,g.y,OwnRadius,keep,dx,dy);
+ int per=(c.style==Style::Defend&&c.phase!=Phase::Idle)?DefendPerPass:ReclaimPerPass,idle=0;std::vector<uint16_t> given;
+ auto stuckOf=[&](const Gardener&g){return g.work==Work::Idle||(g.work==Work::Searching&&g.misses>SearchMisses);};
+ for(auto&g:gs)if(stuckOf(g)&&!benched(c,g.id,g.uid,t)&&!inFire(g.x,g.y,f))idle++;
+ for(size_t k=0;k<gs.size();k++){const Gardener&g=gs[(start+k)%gs.size()];if(sent>=per||failed>=per)break;bool stuck=stuckOf(g);if(!stuck||benched(c,g.id,g.uid,t)||inFire(g.x,g.y,f))continue;
+  int dx=0,dy=0;bool homeSide=distance(g.x,g.y,s.homeX,s.homeY)<=LaunchReach; /* r33 review: never alone across the map */
+  bool mine=ops.ownDark(c,g.x,g.y,ReclaimRadius,keep,dx,dy)||(homeSide&&ops.ownDark(c,s.homeX,s.homeY,LaunchReach,keep,dx,dy));
   if(!mine&&(!border||!ops.darkNear(c,g.x,g.y,ReclaimRadius,keep,dx,dy)||distance(dx,dy,s.homeX,s.homeY)>ReclaimHome)){failed++;continue;}
   if(ops.defenders(dx,dy,DefenceRadius,false))continue;
   if(!legClear(g.x,g.y,dx,dy,f,GardenerKeep)){failed++;continue;} /* never across the fire */
-  ops.sendGardener(c,g,dx,dy);sent++;if(mine)own++;keep.push_back({dx,dy,SpreadKeep});note.goalX=dx;note.goalY=dy;}
+  ops.sendGardener(c,g,dx,dy);sent++;if(mine)own++;given.push_back(g.id);keep.push_back({dx,dy,SpreadKeep});note.goalX=dx;note.goalY=dy;}
  if(sent){note.value=sent;note.versus=own;note.reason=own?"own territory":"border";ops.report(Event::Reclaim,note);}
+ else if(!c.reclaimNote||t-c.reclaimNote>=ReclaimNote){Intrusion in;ops.intrusion(c,in);
+  if(in.own>0){c.reclaimNote=t?t:1;note.value=0;note.versus=idle;note.goalX=note.goalY=-1;note.reason=idle?"none sent: no Dark cell in reach":"none sent: no idle free gardener";ops.report(Event::Reclaim,note);}}
+ /* r33: free gardeners still parked in the field (a campaign ended or a load dropped it) walk home when it is safe;
+    r33 review: an idle one beyond LaunchReach with no own Dark cell within ReclaimRadius too (no campaign musters it there),
+    unless a running defence of this sector stands within PickReach of it (hold() adopts it). */
+ std::vector<std::pair<int,int>> foes;bool foesRead=false;int home=0;bool defending=c.style==Style::Defend&&c.phase!=Phase::Idle;
+ for(auto&g:gs){if(home>=2)break;int d=distance(g.x,g.y,s.homeX,s.homeY);if(g.work!=Work::Idle||(g.escorted?d<=GatherHome:d<=LaunchReach)||benched(c,g.id,g.uid,t)||std::find(given.begin(),given.end(),g.id)!=given.end())continue;
+  if(defending&&distance(g.x,g.y,c.frontX,c.frontY)<=PickReach)continue;
+  int qx=0,qy=0;if(!g.escorted&&ops.ownDark(c,g.x,g.y,ReclaimRadius,keep,qx,qy))continue;
+  if(!foesRead){foesRead=true;ops.darkFighters(c,foes);}bool danger=false;for(auto&q:foes)if(distance(q.first,q.second,g.x,g.y)<=ThreatRadius)danger=true;
+  if(!danger&&sendOut(c,ops,g,f,s.homeX,s.homeY))home++;}
+ if(home){note.value=home;note.versus=0;note.goalX=s.homeX;note.goalY=s.homeY;note.reason="parked gardener sent home";ops.report(Event::Reclaim,note);}
 }
 // The fire guard, every director step of a campaign while the fire is on: a
 // citadel target (or a target the fire now locks) is left; every soldier
@@ -846,8 +1113,10 @@ template<class Ops> bool guard(Campaign&c,uint32_t t,Ops&ops,const std::vector<S
  std::vector<Soldier> fresh;for(auto&s:m)if(inFire(s.x,s.y,f)&&!pulled(c,s.uid,t))fresh.push_back(s);
  if(!fresh.empty()){Army h=summary(fresh);int ex=0,ey=0;bool way=exitPoint(h.x,h.y,f,h.count,stand,ex,ey);if(way)ops.move(c,fresh,ex,ey,false);for(auto&s:fresh)pull(c,s.uid,t); /* no way out: tried again after GuardResend */
   note.value=h.count;note.versus=0;note.goalX=ex;note.goalY=ey;note.reason=way?"soldiers out of the fire defence":"soldiers in the fire defence, no way out";ops.report(Event::Fire,note);
+  {std::vector<Pulled> who;for(auto&s:fresh){Pulled q;q.id=s.id;q.x=s.x;q.y=s.y;who.push_back(q);}ops.pulled(c,f,m,who,way?ex:-1,way?ey:-1);} /* r36: before replanAt changes the leg */
   if(c.phase==Phase::March||c.phase==Phase::Return)c.replanAt=t+GuardResend; /* the stored waypoints led here: a new way once they are out */
-  if(!c.fireAt||t-c.fireAt>=GuardResend){c.fireAt=t?t:1; /* a new extraction episode */
+  uint32_t sinceFire=c.fireAt?t-c.fireAt:GuardResend;
+  if(h.count>=std::max(LureMin,(int)m.size()/10)&&sinceFire>=GuardResend){c.fireAt=t?t:1; /* a new extraction episode (r38: stragglers alone do not count) */
    bool front=c.phase==Phase::Assault&&!c.target.id&&!c.hunting; /* a sweep's escort at its front */
    uint32_t key=((uint32_t)c.phase<<28)^(c.target.id?c.target.uid:front?(0x4000000u|((uint32_t)c.frontX<<13)|(uint32_t)c.frontY):(c.hunting?1u:2u));
    if(c.lureKey!=key||!c.lureSince||t-c.lureSince>LureWindow){c.lureKey=key;c.lureSince=t?t:1;c.lures=0;}
@@ -856,16 +1125,17 @@ template<class Ops> bool guard(Campaign&c,uint32_t t,Ops&ops,const std::vector<S
     if(c.target.id){avoid(c,c.target.uid,t,LostAvoid);c.reason="lured toward the fire defence";ops.report(Event::Avoid,c);retarget(c,t,ops,m);}
     else startReturn(c,t,ops,m,"lured toward the fire defence");
     return true;}}}
- std::vector<Gardener> gs;living(c,ops,gs);int out=0,bench=0;Strength s{};bool home=false;
+ std::vector<Gardener> gs;living(c,ops,gs);int out=0,bench=0;Strength s{};bool home=false;std::vector<Pulled> who;
  for(int i=std::min((int)gs.size(),c.gardeners)-1;i>=0;i--){const Gardener&g=gs[i];
   if(!inFire(g.x,g.y,f)&&!(g.aimX>=0&&inFire(g.aimX,g.aimY,f)))continue;
-  int r=recall(c,g,t);if(!r)continue;
+  int r=recall(c,g,t);if(!r)continue;who.push_back(pulledOf(g,r==2,false,c.gcx[i]>=0?c.gcx[i]:c.gdx[i],c.gcx[i]>=0?c.gcy[i]:c.gdy[i])); /* r36 */
   if(r==2){if(!home){s=ops.strength(c);home=true;}dropGardener(c,i);if(sendOut(c,ops,g,f,s.ok?s.homeX:-1,s.ok?s.homeY:-1))out++;bench++;continue;}
   int x=-1,y=-1;bool cell=false;
   if(c.gcx[i]>=0&&c.target.id){RingCell rc;rc.x=c.gcx[i];rc.y=c.gcy[i];rc.dark=true;int bx=0,by=0;if(ops.beside(c.target,rc,bx,by)&&!closer(bx,by,f,GardenerKeep)&&legClear(g.x,g.y,bx,by,f,GardenerKeep)){x=bx;y=by;cell=true;}}
   if(x<0&&c.orderAt&&!closer(c.goalX,c.goalY,f,GardenerKeep)&&legClear(g.x,g.y,c.goalX,c.goalY,f,GardenerKeep)){x=c.goalX;y=c.goalY;}
   if(sendOut(c,ops,g,f,x,y))out++;c.gsent[i]=t;if(!cell){c.gcx[i]=-1;c.gcy[i]=-1;}}
  if(out||bench){note.value=out;note.versus=bench;note.goalX=note.goalY=-1;note.reason="gardener out of the fire defence";ops.report(Event::Fire,note);}
+ if(!who.empty())ops.pulled(c,f,m,who,-1,-1);
  return false;
 }
 // The siege: the soldiers hold a cell 3+ tiles off the footprint and, once
@@ -885,7 +1155,8 @@ template<class Ops> bool guard(Campaign&c,uint32_t t,Ops&ops,const std::vector<S
 // sent only along a clear leg.
 inline int ringIndex(const std::vector<RingCell>&ring,int x,int y){for(int i=0;i<(int)ring.size();i++)if(ring[i].x==x&&ring[i].y==y)return i;return -1;}
 template<class Ops> void siege(Campaign&c,uint32_t t,Ops&ops,const std::vector<Soldier>&m){
- Army a=summary(m);std::vector<Gardener> gs;int had=c.gardeners;living(c,ops,gs);c.lost+=had-c.gardeners;int want=c.escort?0:c.want;
+ std::vector<Soldier> core;Army a=body(m,&core);if(c.split)core=m; /* a pincer: the nearest soldier of either half */
+ std::vector<Gardener> gs;living(c,ops,gs);int want=c.escort?0:c.want; /* living() counts c.lost */
  std::vector<Target> all;ops.targets(c,all);Fire f=fire(c,ops,all);
  /* Gardeners dying at one target: replacements only while fewer than half the style's number died; once as
     many as the style takes died there, the target is given up (a hopeless target must not eat the pool). */
@@ -917,33 +1188,35 @@ template<class Ops> void siege(Campaign&c,uint32_t t,Ops&ops,const std::vector<S
  /* A Temple/Fortress that still parks entering settlers should not collapse (they would be left off the
     map, as in the unmodded game): at most dark-2 gardeners of the campaign that called (none of an allied
     one) may work its ring, each greening one cell per ~31 ticks while the director looks every 10; the
-    others walk home, because native gardeners keep greening the Dark land around wherever they stand. At
+    others wait parked (WATCH: job 0xB0 greens nothing) at the rear point behind the screen (r33 review: r32 sent
+    them home alone across the map and the final gather walked them back alone) and get ring cells again as the
+    allowance allows; they go home with the army when the campaign ends. At
     most HoldMax ticks per target, so continuous recruitment cannot make the citadel unbreakable. */
  bool parked=(c.target.kind==Temple||c.target.kind==Fortress)&&dark<=ParkedDark&&ops.parked(c.target);
  if(parked&&!c.parkedSince)c.parkedSince=t; /* the budget counts per target (reset with a new target only) */
  bool parkedNow=parked&&t-c.parkedSince<HoldMax,hold=parkedNow&&dark<=2;
  if(hold!=c.holding){c.holding=hold;c.reason=hold?"settlers inside":"";if(hold)ops.report(Event::Deferred,c);}
- int homeX=a.x,homeY=a.y;if(parkedNow){Strength s=ops.strength(c);if(s.ok){homeX=s.homeX;homeY=s.homeY;}}
  /* r32: until then the gardeners wait behind the screen: one without a ring cell that strayed beyond EscortRadius
-    from the army (and is not greening) is called back to the rear point. */
+    from the army is called back to the rear point (r33: greening stray Dark land too, measured to the nearest soldier). */
  /* r32 review: facing a threat the rear point follows it (away from the threat behind the army's cell), and a
     waiting gardener nearer the threat than that cell is called back too. */
  if(!secure){int rx=c.rearX>=0?c.rearX:a.x,ry=c.rearX>=0?c.rearY:a.y,tx=0,ty=0;bool th=c.orderAt&&!c.split&&threat(c,ops,f,tx,ty);int screenGap=th?distance(c.goalX,c.goalY,tx,ty):0;
   if(th){rearPoint(c,ops,f,c.goalX,c.goalY,a.x,a.y,true,tx,ty,rx,ry);c.rearX=rx;c.rearY=ry;}
-  gather(c,t,ops,gs,f,rx,ry,[&](int i,const Gardener&g){return c.gcx[i]<0&&g.work!=Work::Working&&(distance(g.x,g.y,a.x,a.y)>EscortRadius||(th&&distance(g.x,g.y,tx,ty)<=screenGap))&&t-c.gsent[i]>=GardenerResend;},[&](int px,int py){return !th||distance(px,py,tx,ty)>screenGap;});}
+  gather(c,t,ops,gs,f,rx,ry,[&](int i,const Gardener&g){return c.gcx[i]<0&&(reachOf(core,g.x,g.y)>EscortRadius||(th&&distance(g.x,g.y,tx,ty)<=screenGap))&&t-c.gsent[i]>=GardenerResend;},[&](int px,int py){return !th||distance(px,py,tx,ty)>screenGap;});}
  if(!secure&&!parkedNow)return;
  /* Ring cells: unoccupied first, then farthest from the fire, then nearest to the army. */
  std::vector<std::pair<int,int>> foes;ops.darkFighters(c,foes);auto defended=[&](int x,int y){for(auto&q:foes)if(distance(x,y,q.first,q.second)<=DefenceRadius)return true;return false;};
  std::vector<int> cells;for(int i=0;i<(int)ring.size();i++)if(ring[i].dark&&!closer(ring[i].x,ring[i].y,f,GardenerKeep))cells.push_back(i);
  std::sort(cells.begin(),cells.end(),[&](int p,int q){if(ring[p].occupied!=ring[q].occupied)return !ring[p].occupied;int ep=clear2(ring[p].x,ring[p].y,f),eq=clear2(ring[q].x,ring[q].y,f);if(ep!=eq)return ep>eq;return distance(ring[p].x,ring[p].y,a.x,a.y)<distance(ring[q].x,ring[q].y,a.x,a.y);});
  int allow=parkedNow?((c.style==Style::Allied||!ops.leads(c,c.target))?0:std::max(0,dark-2)):MaxGardeners,engaged=0; /* one campaign per parked citadel */
+ std::vector<int> surplus; /* r33 review: beyond the allowance, parked behind the screen */
  for(int i=0;i<(int)gs.size()&&i<c.gardeners;i++){const Gardener&g=gs[i];
   int mine=c.gcx[i]>=0?ringIndex(ring,c.gcx[i],c.gcy[i]):-1;bool assigned=mine>=0&&ring[mine].dark;
   int held=g.reservedX>=0?ringIndex(ring,g.reservedX,g.reservedY):-1;bool working=held>=0&&ring[held].dark;
   bool nearby=assigned||working;if(!nearby&&g.work==Work::Working)for(auto&r:ring)if(r.dark&&distance(r.x,r.y,g.x,g.y)<=2){nearby=true;break;}
-  if(parkedNow){ /* within the allowance a gardener works on; every other one walks home (a working one at once) */
+  if(parkedNow){ /* within the allowance a gardener works on; every other one waits parked at the rear point (a working one at once) */
    if(nearby&&engaged<allow)engaged++;
-   else if(nearby||engaged>=allow){if(working||distance(g.centreX,g.centreY,homeX,homeY)>2){sendOut(c,ops,g,f,homeX,homeY);c.gsent[i]=t;}c.gcx[i]=c.gcy[i]=-1;continue;}}
+   else if(nearby||engaged>=allow){surplus.push_back(i);c.gcx[i]=c.gcy[i]=-1;if(!g.escorted){c.gsent[i]=0;c.gdx[i]=c.gdy[i]=-1;}continue;}} /* not parked yet: stopped now */
   if(working)continue;
   bool stuck=g.work==Work::Idle||(g.work==Work::Searching&&g.misses>SearchMisses);
   /* Its own search can drift outward from a still-Dark cell; then the cell is free again. */
@@ -955,9 +1228,16 @@ template<class Ops> void siege(Campaign&c,uint32_t t,Ops&ops,const std::vector<S
    if(taken||defended(ring[k].x,ring[k].y))continue;
    int x=ring[k].x,y=ring[k].y;ops.beside(c.target,ring[k],x,y);if(closer(x,y,f,GardenerKeep))continue;
    if(!legClear(g.x,g.y,x,y,f,GardenerKeep)){ /* not straight there: to the army's cell first, the cell is given out later */
-    if(c.orderAt&&!closer(c.goalX,c.goalY,f,GardenerKeep)&&legClear(g.x,g.y,c.goalX,c.goalY,f,GardenerKeep)){ops.sendGardener(c,g,c.goalX,c.goalY);c.gsent[i]=t;}break;}
-   ops.sendGardener(c,g,x,y);c.gcx[i]=ring[k].x;c.gcy[i]=ring[k].y;c.gsent[i]=t;if(parkedNow&&!nearby)engaged++;break;}
+    if(c.orderAt&&!closer(c.goalX,c.goalY,f,GardenerKeep)&&legClear(g.x,g.y,c.goalX,c.goalY,f,GardenerKeep)){ops.park(c,g,c.goalX,c.goalY);c.gdx[i]=c.goalX;c.gdy[i]=c.goalY;c.gsent[i]=t?t:1;}break;} /* r33: parked there */
+   work(c,t,ops,i,g,x,y);c.gcx[i]=ring[k].x;c.gcy[i]=ring[k].y;if(parkedNow&&!nearby)engaged++;break;}
  }
+ /* r33: a gardener without a Dark ring cell (none left for it, or its cell turned green) that strayed beyond EscortRadius
+    from the nearest soldier (greening stray Dark land or not) waits behind the screen again. */
+ if(parkedNow&&!surplus.empty()){int rx=c.rearX>=0?c.rearX:a.x,ry=c.rearX>=0?c.rearY:a.y;
+  gather(c,t,ops,gs,f,rx,ry,[&](int i,const Gardener&){return std::find(surplus.begin(),surplus.end(),i)!=surplus.end();});}
+ if(!parkedNow){int rx=c.rearX>=0?c.rearX:a.x,ry=c.rearX>=0?c.rearY:a.y;living(c,ops,gs);
+  gather(c,t,ops,gs,f,rx,ry,[&](int i,const Gardener&g){int mine=c.gcx[i]>=0?ringIndex(ring,c.gcx[i],c.gcy[i]):-1;int held=g.reservedX>=0?ringIndex(ring,g.reservedX,g.reservedY):-1;
+   return !(mine>=0&&ring[mine].dark)&&!(held>=0&&ring[held].dark)&&reachOf(core,g.x,g.y)>EscortRadius&&t-c.gsent[i]>=GardenerResend;});}
 }
 // A march plans again from where the army stands (after a guard extraction, a late or bent leg): as one
 // army (a pincer's flank legs no longer hold); without a safe way the target is avoided and the army goes home.
@@ -968,21 +1248,34 @@ template<class Ops> void remarch(Campaign&c,uint32_t t,Ops&ops,const std::vector
  if(c.target.id){avoid(c,c.target.uid,t,LostAvoid);c.reason="no way outside the fire defence";ops.report(Event::Avoid,c);}
  startReturn(c,t,ops,m,"no way outside the fire defence");
 }
+// r37: a leg is late when its budget (legBudget of its length, counted from c.since) is spent or the army body came
+// no closer than nearBest-1 to the leg end for NoProgress ticks; the record restarts with every new leg end.
+// r38: length and progress are the walked steps (ops.walkSteps: the native path; field pid 3832, First Dawn: the walk from
+// the Viking base loops south-east around the lake, the hex distance to the goal grew for 1,500 ticks and every march
+// failed "target not reached"), the hex distance only where no walk is known.
+template<class Ops> bool stalled(Campaign&c,uint32_t t,Ops&ops,const std::vector<Soldier>&m,int sx,int sy,int gx,int gy){
+ int len=ops.walkSteps(c,sx,sy,gx,gy);uint32_t budget=legBudget(std::max(distance(sx,sy,gx,gy),len));if(m.empty())return t-c.since>budget;
+ Army b=body(m);int w=ops.walkSteps(c,b.x,b.y,gx,gy);int d=w>0?w:distance(b.x,b.y,gx,gy);
+ if(c.nearX!=gx||c.nearY!=gy||!c.nearAt){c.nearX=gx;c.nearY=gy;c.nearBest=d;c.nearAt=t?t:1;}
+ else if(d<c.nearBest-1){c.nearBest=d;c.nearAt=t?t:1;}
+ return t-c.since>budget||t-c.nearAt>NoProgress;
+}
 // March: through the waypoints, then wait until 70% of the army stands at the
-// staging cell (each half at its own cell for a pincer), or MarchTimeout, then
-// assault. A late or re-sent leg is checked from where the army stands; when it
+// staging cell (each half at its own cell for a pincer), or late (r37: the
+// leg's budget or no progress for NoProgress), then assault. A late or re-sent leg is checked from where the army stands; when it
 // is not clear (or the guard pulled soldiers out) the march plans again.
-// r32: a leg ends only with the convoy together (every held gardener within convoyLimit() of the army centre, of
-// the first half for a pincer), the convoy steps every ConvoyEvery ticks; a campaign whose gardeners were all
-// left behind goes home; a rally ends at the gardeners with a new approach from there.
+// r35: a waypoint ends when the army is there (r32 waited for the convoy at every leg end); the staging cell waits
+// for the gardeners (within convoyLimit() of the army body, of the first half for a pincer) at most StageWait ticks
+// (gathered()); the convoy looks every ConvoyEvery ticks; a campaign whose gardeners all died goes home.
 template<class Ops> void march(Campaign&c,uint32_t t,Ops&ops,const std::vector<Soldier>&m){
  if(c.replanAt){if(t<c.replanAt)return;remarch(c,t,ops,m);return;}
  /* r32: all died on the way: the target is avoided, the army goes home. All left behind: convoy() sends it home. */
- if(c.gardeners){std::vector<Gardener> gs;living(c,ops,gs);if(!c.gardeners&&!c.hunting&&!c.escort&&!c.rally){
+ if(c.gardeners){std::vector<Gardener> gs;living(c,ops,gs);if(!c.gardeners&&!c.hunting&&!c.escort){
   if(c.target.id){avoid(c,c.target.uid,t,LostAvoid);c.reason="gardeners lost";ops.report(Event::Avoid,c);}startReturn(c,t,ops,m,"no gardeners left");return;}}
- bool late=t-c.since>MarchTimeout,step=convoying(c)?t-c.convoyAt>=ConvoyEvery:t-c.lastOrder>=2*ReorderEvery;
+ int lsx=0,lsy=0;legFrom(c,lsx,lsy);int lgx=walking(c)?c.vx[c.viaAt]:c.stageX,lgy=walking(c)?c.vy[c.viaAt]:c.stageY;
+ bool late=stalled(c,t,ops,m,lsx,lsy,lgx,lgy),step=convoying(c)?t-c.convoyAt>=ConvoyEvery:t-c.lastOrder>=2*ReorderEvery; /* r37: by progress and the leg's budget; r38: walked */
  std::vector<Target> all;ops.targets(c,all);Fire f=fire(c,ops,all);
- if(c.split){std::vector<Soldier> a,b;halves(m,a,b);bool arrived=within(a,c.stageX,c.stageY,10)*10>=(int)a.size()*7&&within(b,c.stage2X,c.stage2Y,10)*10>=(int)b.size()*7&&together(c,ops,a.empty()?b:a);
+ if(c.split){std::vector<Soldier> a,b;halves(m,a,b);bool arrived=within(a,c.stageX,c.stageY,10)*10>=(int)a.size()*7&&within(b,c.stage2X,c.stage2Y,10)*10>=(int)b.size()*7&&gathered(c,t,ops,a.empty()?b:a);
   Army sa=summary(a),sb=summary(b);bool clear=(a.empty()||legClear(sa.x,sa.y,c.stageX,c.stageY,f,legKeep(std::max(1,sa.count))))&&(b.empty()||legClear(sb.x,sb.y,c.stage2X,c.stage2Y,f,legKeep(std::max(1,sb.count))));
   if(arrived){c.phase=Phase::Assault;c.since=t;ops.report(Event::Assault,c);order(c,t,ops,m);}
   else if((late||t-c.lastOrder>=2*ReorderEvery)&&!clear)remarch(c,t,ops,m);
@@ -990,17 +1283,18 @@ template<class Ops> void march(Campaign&c,uint32_t t,Ops&ops,const std::vector<S
   else if(step)order(c,t,ops,m);
   return;}
  bool via=walking(c);int gx=via?c.vx[c.viaAt]:c.stageX,gy=via?c.vy[c.viaAt]:c.stageY,there=within(m,gx,gy,10);
- bool arrived=there*10>=(int)m.size()*7&&together(c,ops,m);Army a=summary(m);int keep=legKeep(std::max(1,groupSize(c,m)));
+ bool arrived=there*10>=(int)m.size()*7&&(via||gathered(c,t,ops,m));Army a=summary(m);int keep=legKeep(std::max(1,groupSize(c,m)));
  if(via&&arrived){c.viaAt++;c.since=t;order(c,t,ops,m);return;}
  if(via&&late){remarch(c,t,ops,m);return;}
  if(arrived||late){
-  if(c.rally){c.rally=false;if(c.style==Style::Pincer)c.split=true;c.nesting++;approach(c,t,ops,m,all,a.x,a.y);c.nesting--;return;} /* r32: at the gardeners: on with them */
   if(late&&!arrived&&c.target.id&&!legClear(a.x,a.y,c.target.doorX,c.target.doorY,f,keep)){remarch(c,t,ops,m);return;} /* never straight to the door across the fire */
+  /* r33: still far from the staging cell when late (field: three marches that never crossed a river): failed; r37: the next target from here */
+  if(late&&!arrived&&c.target.id&&distance(body(m).x,body(m).y,gx,gy)>2*StageDistance){failed(c,c.target.uid,t);c.reason="target not reached";ops.report(Event::Avoid,c);retarget(c,t,ops,m);return;}
   // Re-check the defence at the staging cell: too strong now -> another target.
   if(c.target.id&&c.raid){int now=ops.defenders(c.target.doorX,c.target.doorY,RaidRadius,true),limit=defenceLimit(ops.config(c.player),summary(m).weight);
    if(now*2>limit*3){c.value=limit;c.versus=now;avoid(c,c.target.uid,t);ops.report(Event::Avoid,c);retarget(c,t,ops,m);return;}}
   c.phase=Phase::Assault;c.since=t;ops.report(Event::Assault,c);
-  if(c.style==Style::Sweep&&!c.target.id){c.lastOrder=0;return;}
+  if((c.style==Style::Sweep||c.style==Style::Defend)&&!c.target.id){c.lastOrder=0;return;}
   order(c,t,ops,m);
  }
  else if(step){if(convoying(c)||legClear(a.x,a.y,gx,gy,f,keep))order(c,t,ops,m);else remarch(c,t,ops,m);} /* the convoy checks its own legs */
@@ -1038,7 +1332,7 @@ template<class Ops> void sweep(Campaign&c,uint32_t t,Ops&ops,const std::vector<S
  }
  /* The escort holds beyond the chase reach of defenders inside the fire (HuntKeep), not only its formation keep. */
  if(!c.lastOrder||(t-c.lastOrder>=ReorderEvery&&holders(c,m)<needed(m))){int hx=c.frontX,hy=c.frontY,hk=std::max(soldierKeep(std::max(1,a.count)),HuntKeep);
-  if(holdPoint(c,ops,f,c.frontX,c.frontY,a.x,a.y,hk,hx,hy)||!closer(hx,hy,f,hk)){send(c,t,ops,m,hx,hy,false);c.rearX=hx;c.rearY=hy;}}
+  if(holdPoint(c,ops,f,c.frontX,c.frontY,a.x,a.y,hk,hx,hy)||(!closer(hx,hy,f,hk)&&ops.stand(c,hx,hy,1))){send(c,t,ops,m,hx,hy,false);c.rearX=hx;c.rearY=hy;}} /* r33 review: never an unchecked cell */
  /* r32: gardeners without a cell near the escort walk with it to its hold cell (one id per order), while Dark
     fighters are near the front to 2*RearStep behind it (away from the front). */
  bool foes=ops.defenders(c.frontX,c.frontY,DefenceRadius,false);
@@ -1054,7 +1348,66 @@ template<class Ops> void sweep(Campaign&c,uint32_t t,Ops&ops,const std::vector<S
   if(!(stuck||away||c.gcx[j]<0)||t-c.gsent[j]<GardenerResend)continue; /* r32: one that walked with the escort has no cell yet */
   int cx=0,cy=0;if(!ops.darkNear(c,a.x,a.y,EscortRadius,taken,cx,cy))break; /* the Dark land nearest the escort */
   if(!legClear(g.x,g.y,cx,cy,f,GardenerKeep))continue;
-  ops.sendGardener(c,g,cx,cy);c.gcx[j]=cx;c.gcy[j]=cy;c.gsent[j]=t;taken.push_back({cx,cy,SpreadKeep});}
+  work(c,t,ops,j,g,cx,cy);c.gcx[j]=cx;c.gcy[j]=cy;taken.push_back({cx,cy,SpreadKeep});}
+}
+// r33: the defence in place (see defend()). Every DefendLook ticks: the Dark units near the area and the Dark fighters'
+// weight near the army are read again; the soldiers' cell (stageX/stageY) is next to the nearest Dark group (native
+// combat engages within 13), else beside own Dark land near the army, else the next area; longer moves (beyond
+// StageDistance) are convoy steps from where the move began (legX/legY), shorter ones plain orders. Gardeners: an own
+// Dark cell within EscortRadius of the army body each (FORWARD: they green around it natively), none within DefendDanger
+// of a Dark fighter; one that strayed beyond EscortRadius of the nearest soldier or stopped searching gets a new cell, the
+// others wait parked behind the army (rear point RearStep beyond it, away from the units).
+template<class Ops> void hold(Campaign&c,uint32_t t,Ops&ops,const std::vector<Soldier>&m){
+ if(c.phase==Phase::March){march(c,t,ops,m);return;}
+ std::vector<Target> all;ops.targets(c,all);Fire f=fire(c,ops,all);
+ std::vector<Gardener> gs;living(c,ops,gs);strays(c,ops,gs);std::vector<Soldier> core;Army a=body(m,&core);int n=groupSize(c,m),hk=std::max(soldierKeep(n),HuntKeep);
+ /* r33 review: free gardeners near the army join the defence (those greening the intrusion alone, or a defence launched
+    with none at home), at most up to its number, every 5*GardenerResend ticks, never across or out of the fire. */
+ if((int)gs.size()<c.want&&(!c.lastTopUp||t-c.lastTopUp>=GardenerResend*5)){c.lastTopUp=t?t:1;int before=c.gardeners;
+  assign(c,ops,a.x,a.y,c.want,t,[&](const Gardener&g){return reachOf(core,g.x,g.y)<=PickReach&&!inFire(g.x,g.y,f)&&legClear(g.x,g.y,a.x,a.y,f,GardenerKeep);});
+  if(c.gardeners>before){living(c,ops,gs);c.value=c.gardeners;ops.report(Event::Gardeners,c);}}
+ std::vector<Keep> keep;keeps(c,ops,all,f,keep);frontKeeps(f,keep);
+ if(!c.lastFollow||t-c.lastFollow>=DefendLook){bool first=!c.lastFollow;c.lastFollow=t?t:1;
+  Intrusion in;ops.intrusion(c,in);c.threatOwn=in.own;c.threatRise=in.rise;
+  std::vector<std::pair<int,int>> units;int count=0,danger=0;
+  /* r33 review: the danger counts the same fighters as assess()/defendSize() (none within HuntKeep of a live fire centre:
+     guards at the Temple sent every defence near the Dark base home on arrival, and it launched again DefendPause later) */
+  for(auto&p:in.fighters){if(closer(p.first,p.second,f,HuntKeep))continue;if(distance(p.first,p.second,a.x,a.y)<=ThreatRadius)danger+=2;if(distance(p.first,p.second,c.frontX,c.frontY)<=DefendReach){units.push_back(p);count++;}}
+  for(auto&p:in.gardeners)if(!closer(p.first,p.second,f,HuntKeep)&&distance(p.first,p.second,c.frontX,c.frontY)<=DefendReach)units.push_back(p);
+  c.threatUnits=(int)units.size();c.threatFighters=count;
+  if(danger>summary(m).weight){startReturn(c,t,ops,m,"threat too strong");return;}
+  int ux=0,uy=0,un=0,lx=0,ly=0;
+  bool chase=!units.empty()&&cluster(units,f,a.x,a.y,ux,uy,un)&&ops.reach(c,ux,uy)&&legClear(a.x,a.y,ux,uy,f,legKeep(n));
+  bool land=!gs.empty()&&ops.ownDark(c,a.x,a.y,EscortRadius,keep,lx,ly);
+  if(!chase&&!land){int dx=0,dy=0; /* this area is clean: the next one (the own Dark cell nearest the area), none left: home */
+   if(!gs.empty()&&ops.ownDark(c,c.frontX,c.frontY,OwnRadius,keep,dx,dy)&&ops.reach(c,dx,dy)){
+    if(distance(dx,dy,c.frontX,c.frontY)>=2){c.frontX=c.target.doorX=dx;c.frontY=c.target.doorY=dy;c.frontSince=t;c.reason="next area";ops.report(Event::Front,c);}lx=dx;ly=dy;}
+   else{startReturn(c,t,ops,m,gs.empty()?"no gardeners left":"land clean");return;}}
+  int px=chase?ux:lx,py=chase?uy:ly,hx=px,hy=py;
+  if(!holdPoint(c,ops,f,px,py,a.x,a.y,hk,hx,hy)&&(closer(hx,hy,f,hk)||!ops.stand(c,hx,hy,1))){startReturn(c,t,ops,m,"no safe cell near the intrusion");return;} /* r33 review: the fallback cell is standable too */
+  if(first||distance(hx,hy,c.stageX,c.stageY)>=3){c.stageX=hx;c.stageY=hy;c.legX=a.x;c.legY=a.y;c.vias=0;c.viaAt=0;c.waitSince=0;}
+  if(chase&&distance(hx,hy,ux,uy)>0){int len=distance(hx,hy,ux,uy);c.rearX=hx+(int)lround((double)(hx-ux)*RearStep/len);c.rearY=hy+(int)lround((double)(hy-uy)*RearStep/len);}else{c.rearX=hx;c.rearY=hy;}
+ }
+ int hx=c.stageX,hy=c.stageY;
+ if(!gs.empty()&&distance(a.x,a.y,hx,hy)>StageDistance){ /* a longer move: the convoy (the gardeners parked with the army) */
+  if(!c.convoyAt||t-c.convoyAt>=ConvoyEvery){if(!convoy(c,t,ops,m,f,c.legX,c.legY,hx,hy,false)){startReturn(c,t,ops,m,"no way outside the fire defence");return;}}
+  return;}
+ c.waitSince=0;c.waited=0;
+ if((!c.lastOrder||distance(c.goalX,c.goalY,hx,hy)>=3||(t-c.lastOrder>=ReorderEvery&&within(m,hx,hy,SiegeRadius)<needed(m)))&&legClear(a.x,a.y,hx,hy,f,legKeep(n)))send(c,t,ops,m,hx,hy,false);
+ if(gs.empty())return;
+ std::vector<std::pair<int,int>> foes;ops.darkFighters(c,foes);
+ std::vector<Keep> taken=keep;for(auto&q:foes)taken.push_back({q.first,q.second,DefendDanger});for(int j=0;j<c.gardeners;j++)if(c.gcx[j]>=0)taken.push_back({c.gcx[j],c.gcy[j],SpreadKeep});
+ std::vector<int> wait;
+ for(int j=0;j<(int)gs.size()&&j<c.gardeners;j++){const Gardener&g=gs[j];
+  bool stuck=g.work==Work::Idle||(g.work==Work::Searching&&g.misses>SearchMisses),away=reachOf(core,g.x,g.y)>EscortRadius;
+  /* its cell turned green and it holds no reserved cell: a new one (it may keep greening stray cells far from the army) */
+  int qx=0,qy=0;std::vector<Keep> none;bool done=c.gcx[j]>=0&&g.reservedX<0&&c.gsent[j]&&t-c.gsent[j]>=2*GardenerResend&&!ops.ownDark(c,c.gcx[j],c.gcy[j],0,none,qx,qy);
+  if(c.gcx[j]>=0&&!stuck&&!away&&!done&&!g.escorted)continue; /* greening near the army */
+  if(c.gsent[j]&&t-c.gsent[j]<GardenerResend){if(c.gcx[j]<0)wait.push_back(j);continue;}
+  int cx=0,cy=0;
+  if(ops.ownDark(c,a.x,a.y,EscortRadius,taken,cx,cy)&&reachOf(core,cx,cy)<=EscortRadius&&legClear(g.x,g.y,cx,cy,f,GardenerKeep)){work(c,t,ops,j,g,cx,cy);c.gcx[j]=cx;c.gcy[j]=cy;taken.push_back({cx,cy,SpreadKeep});continue;}
+  c.gcx[j]=c.gcy[j]=-1;wait.push_back(j);}
+ if(!wait.empty())gather(c,t,ops,gs,f,c.rearX>=0?c.rearX:a.x,c.rearX>=0?c.rearY:a.y,[&](int i,const Gardener&){return std::find(wait.begin(),wait.end(),i)!=wait.end();});
 }
 // Hunt: march, then follow the hunted group (re-found within HuntRadius every
 // HuntFollow ticks, never within HuntKeep of the fire, only along a clear leg);
@@ -1072,6 +1425,11 @@ template<class Ops> void hunt(Campaign&c,uint32_t t,Ops&ops,const std::vector<So
  c.hunting=false;c.quietSince=0;c.reason="hunt over";ops.report(Event::Hunt,c);
  std::vector<Gardener> gs;living(c,ops,gs);retarget(c,t,ops,m,true);
 }
+// r33: the campaign ends at home: its gardeners within GatherHome of home get home as their work centre (FORWARD:
+// they green Dark land around it natively); any farther one stays parked and reclaim() walks it home when safe.
+template<class Ops> void release(Campaign&c,Ops&ops,const Strength&s){
+ std::vector<Gardener> gs;living(c,ops,gs);if(s.ok)for(auto&g:gs)if(distance(g.x,g.y,s.homeX,s.homeY)<=GatherHome)ops.sendGardener(c,g,s.homeX,s.homeY);c.gardeners=0;
+}
 // One director step for one sector, every Period ticks.
 template<class Ops> void step(Campaign&c,uint32_t t,Ops&ops){
  if(!c.armed){c.armed=true;c.random.state^=(uint32_t)c.player*0x01000193u+(uint32_t)c.sector*0x9e3779b9u+t;toIdle(c,t);c.cooldownUntil=0;}
@@ -1080,24 +1438,26 @@ template<class Ops> void step(Campaign&c,uint32_t t,Ops&ops){
  if(c.phase==Phase::Idle){decide(c,t,ops);return;}
  std::vector<Soldier> m;
  if(!ops.members(c,m)){c.reason="squad vanished";ops.report(Event::Lost,c);toIdle(c,t);return;}
- if(!c.checked&&t>=c.orderAt+IgnoreCheck){c.checked=true;std::vector<Soldier> a,b;halves(m,a,b);Army s=summary(c.split?a:m);if(s.count&&distance(s.x,s.y,c.orderX,c.orderY)<2&&distance(s.x,s.y,c.goalX,c.goalY)>ConvoyLead-3){c.reason="order not executed";ops.report(Event::Ignored,c);}}
+ if(!c.checked&&t>=c.orderAt+IgnoreCheck){c.checked=true;std::vector<Soldier> a,b;halves(m,a,b);Army s=body(c.split?a:m);if(s.count&&distance(s.x,s.y,c.orderX,c.orderY)<2&&distance(s.x,s.y,c.goalX,c.goalY)>ConvoyLead-3){c.reason="order not executed";ops.report(Event::Ignored,c);
+  /* r33: IgnoreLimit ignored orders on one target fail it (field: 15 on one unreachable farm) */
+  if(c.target.id&&c.phase!=Phase::Return&&++c.ignoredOrders>=IgnoreLimit){failed(c,c.target.uid,t);c.reason="orders not executed";ops.report(Event::Avoid,c);retarget(c,t,ops,m);return;}}}
  std::vector<Target> all;ops.targets(c,all);Fire f=fire(c,ops,all);
  if(guard(c,t,ops,m,f))return;
  if(c.phase==Phase::Return){
   Strength s=ops.strength(c);bool hot=false;for(auto&u:m)if(inFire(u.x,u.y,f))hot=true;
   int home=s.ok?within(m,s.homeX,s.homeY,12):(int)m.size();
-  bool done=m.empty()||!s.ok||(!walking(c)&&home*10>=(int)m.size()*8&&together(c,ops,m))||t-c.since>HomeTimeout; /* r32: home with its gardeners */
+  bool done=m.empty()||!s.ok||(!walking(c)&&home*10>=(int)m.size()*8&&together(c,ops,m))||t-c.since>HomeTimeout; /* r32: home with its gardeners (r35: they follow; at home the army waits for them, HomeTimeout at most) */
   /* Never hand soldiers back inside the fire (reservoirs never move them): the guard walks them out first.
      Only a squad that still has a member within FireLine after HotHold ticks (on green land, no way out) is released. */
   if(done&&(!hot||t-c.since>HotHold)){
    /* An incomplete give-back keeps the squad and retries; after 5 tries the next load adopts it. */
-   if(ops.dissolve(c)){ops.report(Event::Dissolved,c);toIdle(c,t);}else if(++c.dissolveTries>=5){c.reason="give-back incomplete";ops.report(Event::Lost,c);toIdle(c,t);}
+   if(ops.dissolve(c)){release(c,ops,s);ops.report(Event::Dissolved,c);toIdle(c,t);}else if(++c.dissolveTries>=5){release(c,ops,s);c.reason="give-back incomplete";ops.report(Event::Lost,c);toIdle(c,t);}
    return;}
   if(m.empty()||!s.ok)return;
   if(c.replanAt){if(t>=c.replanAt){c.replanAt=0;homeward(c,t,ops,m,f,s);}return;} /* the guard's way out first, then a new way home */
   if(c.homeless){if(t>=c.retryAt)homeward(c,t,ops,m,f,s);return;} /* holding outside the fire */
   bool step=convoying(c)&&t-c.convoyAt>=ConvoyEvery; /* r32: the way home is a convoy too */
-  if(walking(c)){int gx=c.vx[c.viaAt],gy=c.vy[c.viaAt];bool there=within(m,gx,gy,10)*10>=(int)m.size()*7&&together(c,ops,m);
+  if(walking(c)){int gx=c.vx[c.viaAt],gy=c.vy[c.viaAt];bool there=within(m,gx,gy,10)*10>=(int)m.size()*7; /* r35: no wait at a waypoint */
    if(there){c.viaAt++;int x=walking(c)?c.vx[c.viaAt]:s.homeX,y=walking(c)?c.vy[c.viaAt]:s.homeY;advance(c,t,ops,m,f,x,y,true);}
    else if(t-c.orderAt>ViaTimeout||t-c.lastOrder>=2*ReorderEvery)homeward(c,t,ops,m,f,s); /* late or re-sent: a way from where the army stands */
    else if(step)advance(c,t,ops,m,f,gx,gy,true);
@@ -1107,8 +1467,10 @@ template<class Ops> void step(Campaign&c,uint32_t t,Ops&ops){
   return;
  }
  if(m.empty()){startReturn(c,t,ops,m,"army lost");return;}
- if((int)m.size()*100<(int)c.initial*(light(c)?50:30)){startReturn(c,t,ops,m,"army beaten");return;}
- if(t-c.started>(c.style==Style::Sweep?SweepTime:CampaignTimeout)){startReturn(c,t,ops,m,"campaign time");return;}
+ if((int)m.size()*100<(int)c.initial*((light(c)||c.style==Style::Defend)?50:30)){startReturn(c,t,ops,m,"army beaten");return;}
+ if(t-c.started>(c.style==Style::Sweep?SweepTime:c.style==Style::Defend?(c.landOnly?LandDefendTime:DefendTime):CampaignTimeout)){startReturn(c,t,ops,m,c.style==Style::Defend?"defence time":"campaign time");return;} /* r37: a land-only defence ends after LandDefendTime */
+ if(answer(c,t,ops,m))return; /* r33: a serious intrusion recalls the army */
+ if(c.style==Style::Defend){hold(c,t,ops,m);return;}
  if(c.style==Style::Hunt&&c.hunting){hunt(c,t,ops,m);return;}
  if(c.style==Style::Sweep&&!c.target.id){sweep(c,t,ops,m);return;}
  if(!c.target.id||!ops.alive(c.target)){
@@ -1116,8 +1478,8 @@ template<class Ops> void step(Campaign&c,uint32_t t,Ops&ops){
   if(c.escort&&c.target.id){startReturn(c,t,ops,m,"allied target fell");return;}
   if(c.style==Style::Sweep){resume(c,t);return;}
   ops.report(Event::Retarget,c);retarget(c,t,ops,m,c.want>0&&!c.gardeners&&!c.escort);return;} /* r32: an adopted army takes gardeners near it and marches with them */
- if(t-c.targetSince>TargetTimeout){avoid(c,c.target.uid,t);if(c.style==Style::Sweep){resume(c,t);return;}startReturn(c,t,ops,m,"target not reached");return;}
- if(c.target.kind!=Farm){for(auto&b:all)if(b.kind==Farm&&b.reachable&&!locked(b,f)){if(c.escort){startReturn(c,t,ops,m,"allied escort released");return;}c.reason="farm first";ops.report(Event::Retarget,c);retarget(c,t,ops,m);return;}}
+ if(t-c.targetSince>targetBudget(c.targetHex)){failed(c,c.target.uid,t);if(c.style==Style::Sweep){resume(c,t);return;}c.reason="target not reached";ops.report(Event::Avoid,c);retarget(c,t,ops,m);return;} /* r33: counted, LostAvoid then LongAvoid; r37: budget by distance, then the next target from here */
+ if(c.target.kind!=Farm){for(auto&b:all)if(b.kind==Farm&&b.reachable&&!locked(b,f)&&!avoided(c,b.uid,t)){if(c.escort){startReturn(c,t,ops,m,"allied escort released");return;}c.reason="farm first";ops.report(Event::Retarget,c);retarget(c,t,ops,m);return;}}
  if(c.phase==Phase::March){march(c,t,ops,m);return;}
  siege(c,t,ops,m);if(c.phase!=Phase::Assault)return;
  /* Re-order only an army that does not hold its cell (a re-order spreads it over the footprint again). */
@@ -1192,6 +1554,10 @@ inline int shovelRestore(ShovelWatch&w,int now){
  if(w.owed>0&&w.seen>=0){if(now+1<w.seen)add=std::max(0,std::min(w.owed,w.seen)-now);else if(now<w.seen)w.owed=std::min(w.owed,now);}
  w.seen=now;return add;
 }
+// r33: a restore is pointless while the home economy holds no iron bar (field, pid 13612: 1,443 restores between ticks
+// 16,084 and 76,510 with the iron stock at 0 and the order stuck at 4): the watch still follows the byte, nothing is put
+// back (the 250-tick evaluation orders again once iron is in stock). iron < 0: unknown, restored as before.
+inline int shovelRestoreWhile(ShovelWatch&w,int now,int iron){int add=shovelRestore(w,now);return iron==0?0:add;}
 // After the 250-tick evaluation: remember the plugin's part of the order
 // (ordered: the byte after it, target: shovelTarget) while shovels are still
 // wanted, otherwise forget it so nothing is put back.

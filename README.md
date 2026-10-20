@@ -44,6 +44,8 @@ python tools\workflow.py
 
 **Your citadel's fire field.** While you own at least one Mushroom Farm, your Dark Temple and Fortress burn enemy soldiers and Gardeners on Dark land within 18 to 24 tiles (more farms, wider field; the visible flames show less). The computers stay out of it and attack your farms first. Their turn for the Temple and Fortress comes when your last farm falls. A Mushroom Farm can't be built within 33 tiles of your Temple or Fortress: a farm there could never be attacked, and the field would never drop.
 
+**Whole-map view.** Alt+9 in a running map shows the whole map (every unit and building); Alt+9 again brings the normal fog back. Saves are not affected.
+
 Always start the mod through `Launch Dark Tribe.cmd`. A normal game start does not load it. A save consists of the game's `.sav` (in `Documents\TheSettlers4\Save`) and a matching sidecar in `save-states\`. Keep them together.
 
 ## Uninstall

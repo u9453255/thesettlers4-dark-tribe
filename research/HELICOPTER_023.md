@@ -28,6 +28,25 @@ Executable SHA256 remains `f6dbb89072f3f0fefa35de23810a22317b8621e7a8a0aec2503ef
 - Movement update at `0x16b4e0` takes off, moves and descends. Ground offsets `+0x78=-10`, `+0x7c=-50`, and cleared flight flag are used as the mod's idle/landed precondition. This interpretation requires gameplay confirmation.
 - Unload tile offsets come from RVA `0xd69988`, first six records: `(2,0),(2,1),(2,2),(1,2),(0,2),(-1,1)`. The implementation checks every one, regardless of native rotating start index. These are not a guessed adjacent hexagon.
 
+## Round r39 (0.2.15): Dark Gardeners leave the Manacopter
+
+User report (2026-10-20): Dark Gardeners boarded into a Manacopter and dropped again were "invincible": selectable but not properly, and no enemy could attack them. File-only disassembly (`work/native-analysis/ai/scripts/q.py`), checked by `tools/inspect-construction.py`:
+
+- The native unload (RVA 0x16B990) pops each passenger from the vector (+0x58/+0x5C) and posts two entity events through the entity's event slot (+0x50, CAnimal 0x132E60, which also puts the unit back on the per-tick scheduler): type 0x19 with the exit tile, then type 0x11 with data 0xD and the tile. The exit tile is record `(signed byte aircraft+0x4E + 3) % 6` of the six offsets at RVA 0xD69988 ((2,0), (2,1), (2,2), (1,2), (0,2), (-1,1)), the same for every passenger.
+- Queued events are consumed in the entity's update (0x132BE0, "ConvertEventIntoGoal") through entity slot 27 (+0x6C; CSettler 0x1818D0), which forwards to the role's slot 14 (+0x38).
+- Soldier roles (CHJBRole 0x189F70, jump table case 0x18A020; CShamanRole forwards other events there) and the computer Gardener (CGardenerRole 0x179A80 at 0x179D1A) handle 0x19 by 0x182A40(id, x, y) (stdcall: the nearest free cell of a land sector around the tile, ground entity map and position +0x18, the type's animation through entity slot +0x70), 0x1BB560 (thiscall: spatial index remove and add), flags `+0x14 &= ~0x8000, |= 0x2100`, job state 0x1B and the unload sound.
+- The Dark Gardener role (CDarkGardenerRole, vtable 0xC5AD04, slot 14 0x174F10) handles only 0xD and 0x11; every other event, 0x19 included, only re-adds the unit to the scheduler. So a dropped Dark Gardener kept the hidden flag, had no ground cell (a click on its cell found nothing; box selection still found it) and no spatial index entry (no enemy search, and no computer defence, could target it), while the 0x11 event gave it its work (job 0xA0 around the tile). Vanilla never boards Dark Gardeners; the mod made them boardable in r10.
+- Fix: `transport()` records the passengers and the exit tile before the native unload and then does the 0x19 part for every former passenger whose role is CDarkGardenerRole and still hidden: 0x182A40 (the exit tile, else the aircraft's cell), 0x1BB560, flags. `PASSENGER_PLACED craft= gardeners= unplaced= exit=` is logged. Soldiers and Shamans are untouched (their roles handle the event themselves later in the same tick).
+- Model: `dt::unloadExit(counter)` (aircraft-model.hpp, aircraft-tests). Not verified in game.
+
+## Round r41 (0.2.15): no Manacopter healing
+
+User report (2026-10-20): a landed Manacopter heals to 100% almost instantly, so enemies shooting it cannot kill it; it should not regenerate at all.
+
+- Cause (file-only disassembly, pinned by `tools/inspect-construction.py`): CManakopter's update (RVA 0x16B4E0) handles a landed aircraft at its destination (+0x78 >= -10, +0x7C >= -50) by rescheduling it every 10 ticks (0x16D5D0(10, id)) and then, when the flag byte of its cell has the Dark bit 0x04, storing DTManakopterHitpoints (BYTE at RVA 0xDCDB24, 250 by default) into its hit points +0x21 (0x16B58F..0x16B597). That is full health every 10 ticks on Dark land; on green land nothing heals. The only other writers of +0x21 are the constructor (0x16AF74) and the damage routine (0x16B490).
+- Fix: `installNoHealing` in dark-tribe.cpp replaces the 3-byte store `88 47 21` at 0x16B594 by NOPs at startup (VirtualProtect, FlushInstructionCache), after pinning the `je` before it, the load with the relocated setting address, the store and the `jmp` after it; an already patched page passes. A mismatch disables the plugin (code 16, `Pinned Manacopter healing signature mismatch`). The startup log says `Manacopter healing on Dark land disabled (RVA 0x16B594)`.
+- Not verified in game. The Manacopter Hall does not heal aircraft in this build's code paths that write +0x21.
+
 ## Implementation and limits
 
 Tick-only scoped rebinding of the last-created slot lets the existing Lua flight routine control a chosen identity, then restores the original slot. Flight verifies the resulting target before reporting acceptance. Creation validates a newly changed native ID/identity rather than the Lua result. A roster tab/Hall button and next-aircraft action avoid relying solely on the missing human Dark menu. Native map destination events are handled using cached selection; coordinate +/-10 and Fly provide an independent fallback. Return chooses an existing clear base entrance.

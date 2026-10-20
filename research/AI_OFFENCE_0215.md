@@ -1,8 +1,287 @@
-# Computer offence against the Dark Tribe (0.2.15 rounds r27 to r32)
+# Computer offence against the Dark Tribe (0.2.15 rounds r27 to r38)
 
 Date: 2026-10-14/15. User request: the computer opponents never attack the Dark Tribe. Reverse-engineer the computer AI and make it play properly against the Dark Tribe: destroy every Mushroom Farm first, then the Temple/Fortress, and win. Follow-up: Dark buildings must fall the native way, by Gardeners turning the ground around them green, so the computer needs an army that attacks and Gardeners that take back the land.
 
 Offline static analysis only: no game was started, attached, captured or injected. Gameplay is unverified until the user tests it (TESTING.md, r27). Private notes and the 400+ instruction checks of the four analysis rounds are in `work/native-analysis/ai/` (ignored folder). `tools/inspect-offence.py` re-checks every native fact the plugin relies on (`research/offence-native-checks.json`).
+
+## Carrier drain analysis (2026-10-20; implemented as Round r43 below)
+
+User report (Iron Kingdom on r42): the computer trained so many soldiers that no carriers were left to transport and build; it should keep expanding its kingdom. File-only disassembly (`work/native-analysis/ai/scripts/q.py`), nothing implemented:
+
+- **Who drafts carriers.** The barracks role tick (CBarrackRole::sub_134AC0, 0x134D5A..0x134D79) converts a carrier into a soldier only while `total carriers (eco+0x26) > busy (eco+0x22) + byte eco+0x1E + reserve (eco+0x20)`; it then marks one busy (0x134EFA). The orders themselves come from CAIAgentRecruitment::sub_32CD0 every 250 ticks: net event 0x13B7 to every ready barracks of the region with fixed amounts per soldier type (clear 0x43, then 12 each of 0x1D/0x20/0x2C, 8/2 of the level-2 types, race specialists only above difficulty 1 at 0x32E1B), no soldier count or limit is checked there.
+- **The carrier reserve is a real, settable value.** eco+0x20 is written by CEcoManager vtable +0x138 (0x51C10: absolute, floor 5) and by 0xD5750 mode 1 (net event 0x13A3, wparam eco<<16|1, lparam delta: new = clamp(old + delta, 5, min(999, total))); modes 2/3 (0xD56A0) set settler-type quotas (byte eco+0x28D, 0..99 or 100 continuous). CNetInputProcessor::Process case 16 (events from 0x1389, byte table 0xF6D3C). The field game showed reserve 8 -> 6 -> 5 as carriers fell to 5: the AI drafted down to the floor.
+- **SoldierLimitAbsolute/Relative.** CAIConfigInt objects at RVA 0xD84244 / 0xD8425C (defaults 250/500 and 200/250 written at 0x15B71/0x15C31). AI.SetPlayerVar (Lua handler 0x3CED0) finds the name in the 12-byte table at 0xBF0630 (index 5 = Absolute, 6 = Relative) and stores the three difficulty values per player into the record `0xE92640 + p*0x17C` (+0 difficulty, +8 pointer to the active column at +0xC + difficulty*0x5C, 23 variables per column; template 0x15AA090 copied by 0x3C7A0 at AI init; 0x3C610 for one player, 0x3D03E.. for all). Readers found by scanning: CAIAgentSquads 0x34371 and 0x14BE49/0x14BF1A read only the difficulty; CAITaskForcePriests reads variables 9/10; **no reader of variables 5 or 6 was found** (no caller of the accessors 0x2BC80/0x2BC90, no inlined `[record+8] -> +0x14/+0x18` in 0x2B000..0x50000). The scenario limits most likely do nothing in this build; the field count (189+ Viking soldiers against an Easy column of 150) agrees.
+- **The AI sets the reserve itself.** CPeopleManagerTask::sub_2566D0 (called from its state setup 0x256100 and its update 0x256263) counts n = pending tasks of three building kinds in the list at owner+4 ([+0x54] 0x11, 4 and 1 with [+0x14] == 3, [+0x10] == 2, [+0x30] == 3), reads the carrier total through CEcoManager +0x98(1) (= word eco+0x26) and stores `reserve = clamp(min(7n + 10, carriers - 10), 5, 80)` absolutely through +0x138 (0x51C10) after +0x140(12). The cap `carriers - 10` makes the reserve follow the carrier count down (8 -> 6 -> 5 in the field log), so the native rule cannot stop the drain by itself. CBuildingManagerTask posts net event 0x13A3 only with modes 2/3 (digger quota: 0x249195 clear, 0x249808 min(count, x), 0x24989D), never mode 1.
+- **Residences.** CPeopleManagerTask (0x256070 state setup, 0x256240 update, 0x2561A0 orders a residence) decides through sub_256430: `need = CEcoManager+0x120(player) - (CEcoManager+0x11C(player) + 50)`, and a residence of type 40/41/42 (small/medium/big) is ordered while `need > count(that type)` and +0x9C(type) says it can be placed (0x253980 picks big when 3+ medium exist). +0x120 is 0xDF730: the sum over the three residence types of count(type) (per-player table 0x10EF764 + p*0x298, 8 bytes per type from type 40) times building-info field +0x30 (table 0x109C600, 0x32C per type, 0x10744 per race) plus a per-player extra `[0x107C8A8 + p*4]`, i.e. the housing capacity. +0x11C is `Statistics + 8 + p*0x1128` (0xDABE30): the per-player settler-type counters start at Statistics + 4 (0xF7D40 increments `+4 + 4*(p*0x44A + type)` and the total at +0x110 when a settler is created, 0xF7DB0 decrements them on removal), so +8 is the count of settler type 1, the carriers. The rule is therefore: order a residence of a type while `housing value - carriers - 50 > count(type)`. Fewer carriers mean more residences, which is why the drained Iron Kingdom kept building houses whose new carriers were drafted at once. The same task sets the digger target clamp((x - 20)/6 + 5, 5, 15) and orders shovels (good 0x1F) for missing diggers.
+
+Approaches (not implemented):
+1. Raise the floor of the AI's own reserve formula: the immediates 5 at 0x256783 (`cmp edi, 5`) and 0x256788 (`mov edi, 5`) become e.g. 20 (a two-byte startup patch like the r41 healing NOP: pinned sequence, fail closed, idempotent). The AI then keeps at least 20 idle carriers (more while building tasks are pending, up to 80), the barracks drafts only above that, and the residence planner keeps adding houses while carriers are scarce. One constant, no per-tick work, native behaviour otherwise.
+1b. Plugin-set carrier reserve: every tick (before the entity update, where the barracks drafts; the AI's own write comes later in CAIMain::Tick) call CEcoManager +0x138 or 0xD5750 mode 1 for each computer home economy with max(AI value, 15 + carriers/4) or similar, as ShovelWatch does for the shovel byte. More flexible (scales with the kingdom), but fights the AI's write every tick and needs tuning.
+2. Scenario SoldierLimit variables: unverified readers, probably inert; not a lever.
+3. Residence growth: the AI already plans residences from housing capacity vs population; with carriers protected the planner and its builders keep working. If it still lags, the plugin can raise the per-player housing extra `[0x107C8A8 + p*4]` or add residences to the start content.
+4. Weapon-driven draft: with weapons unlimited (Iron Kingdom chain) the draft rate equals the weaponsmiths' output; the reserve alone bounds it.
+
+## Round r43: scaling carrier reserve (as implemented)
+
+User decision (2026-10-20): approach A, with a floor that grows with the kingdom.
+
+- Hook: the call `call dword ptr [eax+0x138]` at 0x2567B8 (CPeopleManagerTask::sub_2566D0, the only caller of the slot in .text) becomes `call reserveHook; nop`. `reserveHook` (`__fastcall`: ecx = CEcoManager, the value on the stack, `ret 4` like the native `thiscall` setter) reads the player from CEcoManager +8 (slot +0x80 = 0x51A70 returns it), sums the completed buildings of the player over the 83 types of the table 0x10EF624 + (p*0x53 + type)*8 (incremented by 0x1362F0 when a building completes; 0x13D1C0 is the getter), raises the value to `carrierKeep(buildings)` and calls the native setter 0x51C10 (word eco+0x20 = clamp(value, 5, 999)). While the plugin is not `running` the value passes unchanged.
+- Formula (`offence-model.hpp`, `offence-tests.cpp` carrierReserveFloor): keep = min(ReserveMax 120, ReserveBase 15 + buildings / ReservePer 2); 20 buildings keep 25, 50 keep 40, 100 keep 65. The native value is only ever raised, so the AI's own 7n + 10 for pending construction still applies above the floor.
+- Effect: the barracks (draft only while carriers > busy + reserve) leaves at least `keep` idle carriers; the residence planner (housing value - carriers - 50 > count of the type) keeps ordering houses while carriers are scarce, and only their new settlers become soldiers.
+- Pins (`inspect-construction.py`): the 22 call-site bytes, the setter's clamp and store, the formula's `cmovge`/5/0x50 and the slot call, the vtable slots +0x80 and +0x138, and the completion increment. Startup logs `Computer carrier reserve scaled with the kingdom (RVA 0x2567B8 -> 0x51C10)`; a mismatch disables the plugin (code 17).
+- Log: `CARRIER_RESERVE player= native= keep= buildings= set= held=` when the floor changes or starts/stops holding the AI's value up; `OFFENCE_SUPPLY` carries `keep=`.
+- Not verified in game. Open: whether 15 + buildings/2 is too high for the attack rate the user wants (then raise ReservePer) or too low on large maps (lower it); the hook never touches the human player.
+
+## Round r38: walked progress and steady sieges (as implemented)
+
+User report (2026-10-20, First Dawn on r37): "still behave weirdly, stops attack at the middle of it, It moves a bit then going back".
+
+### Field evidence (pid 3832, r37, First Dawn, Vikings, home 102,431)
+
+- Every march after the first chain failed `target not reached` about 3,000 ticks after its launch (ticks 47,430 → 50,400; 61,650 → 64,520; 67,770 → 70,420; 87,630 → 90,700; 113,450 → 116,480; 128,530 → 131,430; 143,520 → 146,560; 169,780 → 172,720), each followed by `no target left` and a walk home. `OFFENCE_ROUTE` at the failure shows the army at 425..453, 470..491: the walkable way from the Viking base to the Dark farms runs south-east around the lake, then north; the straight legs cross 61..122 cells off the land region (`legOff`). The hex distance to the leg end (a staging cell at about 250..303, 356..413) grows during the first half of that walk, so r37's rule "no closer for 1,500 ticks" failed the leg while the army was walking correctly.
+- The first campaign (tick 3,360) failed the same way at 6,710 but then retargeted from 453,470 and chained five farms (635 → 634 → 636 → 639 → 637 → 640) by tick 17,860: from there the walks are short and direct.
+- Three pincer sieges of farm 1607 (door 318,334, 47.9 tiles from the Temple fire centre) ended `lured toward the fire defence` (ticks 81,420; 107,330; 163,710) after one or two soldiers at a time stood at 25.5..26.8 (inside FireLine 27) three times within 600 ticks: formation cells of an army of 50..148 around the assault cell. The whole siege was given up and the farm avoided.
+- `no reachable Dark building` from 21,100 to 44,740 while one ready farm kept the fire on and the Temple (641, door 339,310) was locked; at 47,360 the fire went out and the Temple became the target.
+
+### Changes
+
+1. Progress and budgets by the walked path: the bridge keeps a breadth-first field per leg end (`walkSteps`, the last `WalkFields` 4 goals, one search per new leg), and `stalled()` measures the army body's steps to the leg end (hex distance only when no walk is known); the leg budget is `legBudget` of the walked length (600 steps: 17,000 ticks). The target budget uses the target's walked path (`c.targetHex = max(hex, path)`).
+2. Lure episodes need `LureMin` 3 soldiers or a tenth of the army pulled at once; single stragglers are moved out without counting (`guard()`).
+3. `detourLimit` = 4 x hex + 100 (r33: 2.5 x hex + 20): the native pathfinder walks the legs since r35, so a long walk is a far target.
+4. `OFFENCE_TARGETS` (every `TargetsNote` 3,000 ticks per sector) lists every Dark building with reachability, walked path, detour, lock, avoidance and land region when a decision finds no reachable building.
+
+### Offline evidence
+
+offence-tests: `marchBudget` (a walk that loops away from the goal while the walked steps shrink is never late; the walked length sets the budget), `guarding` (three single stragglers do not avoid the target, three pulls of LureMin do; the sweep escort case pulls LureMin), `unreachable` (detourLimit 1008 for 227 hex), `gating` (OFFENCE_TARGETS once per TargetsNote). `inspect-offence.py` asserts the field, the walked stall rule, LureMin, the detour limit and the diagnostic.
+
+### Limits
+
+Not verified in game. The walk field costs one breadth-first search per new leg (the land region at worst) on the tick thread. TicksPerHex 25 now applies to walked steps, so budgets are long; a truly stuck army is caught by the no-progress rule after 1,500 ticks.
+
+## Round r37: relentless and smart attacks (as implemented)
+
+User report (2026-10-20, after testing all three maps on the r35 build): "overall they are too small offensive, they attack rarely, really rarely, and uneffective, they go for 1 farm and then different farm which is much further away comparing to other farms which it could destroy earlier, I want you to rework it so computer players are much more offensive, and attack smartly not like stupid idiots."
+
+### Field evidence (pid 17196, r35; games 2..4 of that process)
+
+- First Dawn (166,987 ticks, Vikings, home 78,406): 14 campaigns. 8 ended `target not reached` (MarchTimeout 4,000 on farms 290+ hex from home), each failure avoided the farm 6,000 then 24,000 ticks, so 4 decisions declined `no reachable Dark building`. One assault chained 5 farms (ticks 44,530-62,140): 635 (352,247) → 634 (322,220) → 636 (259,215) → 640 (372,407, 192 hex away) → 639 (206,236, 55 hex from 636). Five hunts in a row (ticks 104,780-154,200), two lost to the fire, one army beaten. Between campaigns: the walk home, a rest of 600..1,499 ticks and chance checks, about 4,500 ticks of nothing.
+- Iron Kingdom (149,867 ticks, home 428,369): 8 campaigns. The chain 774 (164,182) → 766 → 775 (168,113) → 767 (366,431: 318 hex away while 768 at 134,97 was 40 hex away) → 768. Cause: `chooseTarget` scored distance from the army plus the walking detour measured from home. 8 declines `no gardeners` over 46,000 ticks while 14 gardeners lived: all beyond LaunchReach of home (greening the Dark border where a campaign dropped them), none replaced because recruitment counted them as alive.
+- The Alliance (112,260 ticks, three computers): 3 attacks, 117 OFFENCE_DEFEND lines. The computers own thousands of Dark cells from the map start (own=1853 and 634 at tick 840), so every decision began a "serious intrusion" land defence of 6,000 ticks with half the army, repeated DefendPause (300) later; `decide()` runs `defend()` before any attack.
+
+### Design
+
+1. Targets by the walked path (`ops.paths`, bridge `walkAll`): one breadth-first search over the land region from the point the choice is made from (home at a launch, the army's body at a retarget), giving every reachable target its step count; limit = the longest `detourLimit` among the targets, at most twice the map side. `chooseTarget` scores by that path (fallback: hex distance plus the home detour), a target with no walk from here is skipped, and a farm gets `ClusterBonus` (8) per other usable farm within `ClusterRadius` (40), at most `ClusterMax` (24), so the army chains through a group of farms.
+2. Cadence: `FirstMin/FirstMax` 2..4 minutes (was 3..8), `CheckEvery` 128 (256), no chance gate for an army of `AssaultMin` (12) or more, `CooldownMin/Spread` 150/300 (600/900), `RaidChain` 5 (3). Hunts and sweeps weigh 1 while a building is in reach (buildings first; field: five hunts in a row).
+3. Budgets and failures: `legBudget(hex) = MarchTimeout 2,000 + TicksPerHex 25 per hex` (field: about 20 ticks per hex for a convoy), `targetBudget(hex) = TargetTimeout 6,000 + 25 per hex`; a leg is late when its budget is spent or the army body came no closer to the leg end for `NoProgress` 1,500 ticks (`stalled()`). A failed target (late march, budget, ignored orders) is marked `failed()` and the next target is taken from where the army stands (`retarget`), never walked home from; `LongAvoid` 12,000 (24,000).
+4. Defence: land alone never comes before an attack. `attackable()` (a reachable building and a spare army, before `firstAttack` too) defers a land-only defence until `LandDefendGap` 12,000 after the first attack time or the last land defence; a land-only defence takes `escortSize` soldiers (a quarter, at least 8) for `LandDefendTime` 3,000 (`c.landOnly`); a sector that cannot attack defends at once. Only Dark fighters in the territory recall a running attack (`answer()`); Dark Gardeners and land wait for the next defence.
+5. Gardeners: a decision with fewer than `MinGardeners` within LaunchReach calls the `CallHome` (4) nearest far gardeners home (FORWARD, clear leg, not in the fire), at most every `CallHomeEvery` 600 (`OFFENCE_RECLAIM reason=gardeners called home`); recruitment counts only gardeners within LaunchReach of home as alive (`max(close, alive - wanted)`, so at most 2 x wanted exist).
+
+### Offline evidence
+
+- offence-tests: `targetOrder` (a near farm behind a 200-step walk loses to a farther straight one; no walk: skipped; the home detour stays the fallback; a farm with three neighbours wins over a lone nearer one), `gating` (an assault-sized army launches with chance 0, a 10-soldier pool declines "chance"; first attack 2..4 minutes; far gardeners called home, the two farthest wait, not again within CallHomeEvery, then the attack launches), `styles` (hunts and sweeps rare with a building in reach), `campaign` (RaidChain 5), `defending` (200 own cells never recall an attack, a Dark fighter near home does), `landFirst` (with a farm in reach: 48 campaigns in 20,000 teleport ticks, the first land defence at tick 13,790 with 8 soldiers; without a target: an escort-sized defence at once, ending "land clean"/"defence time"), `marchBudget` (budgets, progress, the Stuck engine retargets without a walk home, a siege held by Dark fighters fails after targetBudget and the army takes the next farm from where it stands). The convoy, defence and fire soaks are unchanged and pass.
+- `inspect-offence.py` asserts the constants, `walkAll`, `paths`, the chance rule, the budgets, the land-first rule, the recall rule and the recruitment count.
+
+### Limits
+
+- Not verified in game. `walkAll` costs one breadth-first search per decision or retarget (the whole land region at worst, a few milliseconds); it runs on the tick thread only.
+- TicksPerHex 25 is an estimate from one r35 convoy; a slower field speed makes long legs late by the no-progress rule instead.
+- Land-only defences now come only every 12,000 ticks while attacks are possible: own Dark land far from home is reclaimed more slowly than in r33.
+
+## Round r36: fire-ring pathing analysis and diagnostics (as implemented: diagnostics only)
+
+User report (2026-10-20, r35 build): near a Dark Temple or Fortress the army avoids the fire ring, the gardeners mostly too, "but at some point gardeners get lost from army and seems like strategy stops working properly ... right now its more like minions are just moving back when they are too close but still want to go same direction where they wanted to go but without properly changing pathfinding". The user asked for the analysis and a proposed fix first, then for diagnostics only ("log where each pulled unit stood and which leg it was walking"), so the cause is confirmed in the next game. No behaviour changed.
+
+### Field evidence (pid 17196, r35, First Dawn, one Temple fire centre at 341,302, 7 farms falling to 1)
+
+- 284 `OFFENCE_FIRE ... soldiers out of the fire defence` and 276 `gardener out of the fire defence` lines.
+- Two long loops on the way home from farm 635 (door 352,247) past the Temple's north-west side: ticks 59,790-63,070 (a defence recall ended `lured toward the fire defence`, its way home took 3,200 ticks, 400+ soldier pulls, 1 to 8 soldiers every 10 ticks) and 147,250-148,370 (after the last farm siege, 360+ pulls). Every exit cell lies at 306-337, 260-275, between the ring and a band of rock (terrain 96+) west of the Temple.
+- The defence's 12 gardeners were all benched (two recalls within 600 ticks) between ticks 60,000 and 61,800: `gardeners=2` at 60,760, 0 at 61,810, dissolved without gardeners.
+- Free and sweep gardeners were recalled and benched in bursts later (12, 11, 22, 9 per 1,000 ticks around ticks 159,000-176,000), mostly with the campaign idle (reclaim's free gardeners).
+- `OFFENCE_FIRE_NATIVE soldiers=30 at=347,282`: native AI soldiers (not the plugin's) inside the fire line once; a separate native path.
+
+### Analysis (file-only; to be confirmed by the r36 lines)
+
+1. Routes are geometry only. `route()`/`plan()` put waypoints at soldierKeep(n)+2.. around the centre and accept a leg when every shortest hex path keeps legKeep(n) (`legClear`). The native pathfinder walks around rocks, water and buildings and is free to bend inside that; west of this Temple the corridor between the ring and the rocks is narrow.
+2. Stragglers cut corners. A waypoint ends when 70% of the army is within 10 of it; then every soldier is ordered to the next leg end, including the 30% still on the previous leg, whose straight line was never checked. A route bends around the fire exactly where the direct line is blocked, so their line crosses it. The steady stream of single soldiers turned back every 10 ticks fits this.
+3. The guard repeats the same way. A soldier inside FireLine is sent radially out (`exitPoint`), the march or way home replans 30 ticks later from the army body with the same geometry, gets the same waypoints and the same native paths, and LureLimit (3 in 600 ticks) only gives the target up or holds the way home for 300 ticks before the same route is tried again.
+4. Gardeners are benched by the dips. The second recall within BenchTicks drops a held gardener from its campaign and sends it home; walking dips and the native greening search (nearest Dark cell within about 28 of the gardener, which near a citadel lies inside the ring) trigger it, so a campaign near the fire loses its gardeners and its siege or defence stalls.
+
+### Proposed fix (not implemented)
+
+1. Real paths: extend the bridge's breadth-first walk (`walk()`, land-region tiles) to return a path with the fire disc (FireLine plus the formation margin) blocked, and turn it into short waypoints near the fire (at most 12-16 tiles per leg there); keep `legClear` as the check of each short leg.
+2. Per-unit legs at waypoint changes: soldiers whose own straight line to the new leg end is not clear first go to the waypoint they missed (as `follow()` does for gardeners), or the leg advances near the fire only when about 95% have arrived.
+3. A guard that changes the way: send pulled soldiers to the nearest clear point of the current route instead of radially out, and make a repeated pull on the same leg widen that leg's keep (or block more of the disc in the path search) before a target is avoided.
+4. Gardeners: never bench escorted (WATCH) gardeners for a walking dip, re-park them on the route; keep work centres of FORWARD gardeners at least FireLine plus their search radius from live centres, or re-target before their aim enters the ring; bench only gardeners whose native aim keeps returning inside.
+
+### Diagnostics (r36)
+
+- Model: `Pulled` and `ops.pulled(c, f, m, who, exitX, exitY)`, called by `guard()` for the soldiers it orders out (before replanAt changes the leg) and the held gardeners it recalls (with the bench flag and their campaign cell), and by `reclaim()` for free gardeners. Log only; no state is stored.
+- `OFFENCE_FIRE_PULL ... kind=soldiers|gardeners|free-gardeners leg=via k/n from= to= prev= legFire= legOff= legBuilt= age= body= bodyFire= exit= units= [id@x,y fire= off= prevOff= ...]`: the leg the army was ordered along (start, order cell, previous leg start), the leg's clearance from the fire, the cells of its straight line off the land region (rocks, water) or with a building flag, the ticks since the order, the army body; per unit its clearance and its distance to the current and previous leg segment. Gardeners add their native aim (and its clearance), work state, WATCH flag, campaign cell, work centre and whether this recall benched them. At most 8 units per line.
+- `OFFENCE_ROUTE ... from= end= army= keep= fire= vias=x,y(clearance);... legs=clearance/off/built;... reason=planned|replanned after the fire guard`, and `... same=N reason=replanned after the fire guard, same route` or `way home held outside the fire, same route` when a replan produced the same route.
+- How to read them: a pulled soldier with a large `off` and a small `prevOff` near the leg start was cutting a corner (2); `legOff`/`legBuilt` above 0 with small `off` means terrain bent the native path (1); `same=` counting up confirms the repeated route (3); gardener records with `bench=1` and `aimFire` below 27 but `fire` above it show the native search pulling them in (4).
+
+## Round r35: fast army marches, gardeners follow (as implemented)
+
+User report (2026-10-20, r34 build): "Due to computer army always try to stay near gardeners while executing strategy, the whole movement of army is ullllltra sloooooow, its very very slow. It should not babysit gardeners that hard, movement of army should be fast, not like barely moving becouse babysitting all time."
+
+### Field evidence (pid 22316, r34, First Dawn, Vikings)
+
+- Holds: `OFFENCE_CONVOY ... reason=waiting for gardeners` series of 2,000-5,200 ticks: ticks 40,150-45,360 (gap 234 falling to 15, one walk-back at 44,190), 58,410-60,590 (gap 190 to 19), 61,210-64,120 (gap 16-35 against a limit of 14, a walk-back), 67,760 on (gap 109). Launches waited at home with gaps of 24-44.
+- Three marches ended `target not reached` (MarchTimeout) after such holds.
+- Ticks 141,000-152,000: an army of 221 logged `OFFENCE_ORDER_IGNORED reason=order not executed` three times per target, then `OFFENCE_STAGE reason=orders not executed`, alternating between farms 635 and 637 without moving.
+- Mechanism: every ConvoyEvery (30) ticks the r32/r33 convoy ordered the army to the point ConvoyLead (10) tiles past the slower group (army body or gardeners' centre) towards the leg end; each group order re-forms the whole army (100 per order) around a point a few tiles on. Whenever the farthest gardener was beyond convoyLimit (8 + spread), the army held, and after ConvoyStall it walked back. The army therefore moved at the gardeners' pace in stop-and-go steps, or not at all.
+
+### Design (offence-model.hpp)
+
+- `convoy()`: one order per leg to its end (waypoint, staging cell, assault cell via `order()`, home), snapped to a standable cell, re-sent only when the leg end moves by 2+ or after 2 x ReorderEvery (GuardResend near the fire). False when the leg from the army is not clear of the fire (the caller plans again), as before.
+- `follow()`: the held gardeners go to their cells around the same leg end (`gather()`: WATCH, one id per order, odd lattice, re-ordered only when the cell changes or after ConvoyResend). A gardener whose straight way there passes the fire (GardenerKeep) takes the latest route point it reaches clear: the leg start, then earlier waypoints, then the route start.
+- `gathered()`: only the staging cell waits for the gardeners (together(): within convoyLimit of the nearest soldier of the body), at most StageWait = 300 ticks; then `assault before the gardeners`. Waypoints never wait; the way home waits only at home (HomeTimeout).
+- `approach()`: a direct assault (no staging) within AssaultDistance (40) when the gardeners are together (r33: 2 x ConvoyLead); no rally to far gardeners (a hunt's hand-over marches on, the gardeners follow).
+- `order()`: the assault cell in one order; the gardeners go to the rear point behind the screen (`rearGuard`), unchanged. Late gardeners are pulled there by the siege's escort rule (EscortRadius).
+- Kept: WATCH parking, strays (other land region), PickReach/LaunchReach/TopUpReach, the fire keep-offs for every destination (soldierKeep for the leg end, GardenerKeep and a clear leg for every gardener cell), never a lone FORWARD order except work and the release at home.
+- Removed: the hold and its stop order, the walk-back (ConvoyStall, RallyLimit, ConvoyHysteresis), the convoy step (ConvoyBehind), the rally, the assault-leg convoy, and the fields rally/rallies/bestGap/bestAt/assaultX/assaultY/assaultLeg.
+
+### Offline evidence
+
+- Teleport engine (`convoyRules`): a deaf straggler no longer stops the march (assault after StageWait, the farm falls with the others, the straggler stays held); the first army order is the leg end and at most two more follow before the assault; no rally; a fire-blocked gardener takes the waypoint; deaf gardeners at home or in the field are never sent anywhere but home with FORWARD.
+- Walking soak (`convoySoak`, soldiers 1 cell per 6 ticks, gardeners per 6 or 9, armies of 11 to 117, all six styles): the army never stood still on a march away from its order cell (max stall 0 looks, bound 3), staging waits at most 160 ticks (bound StageWait + 150), joined gardeners stay within EscortRadius + 4 at the target, no deaths, every run collapses a farm. Gardener gaps on the way reach 76 tiles (reported, no longer bounded).
+- `defenceSoak`: the defence still cleans the 469-cell patch ("land clean"), in-place bounds hold for joined gardeners; travel gaps reach 42 over the limit.
+
+### Limits
+
+- Not verified in game. Lagging gardeners walk without escort behind the army and can be caught by Dark fighters.
+- One order per leg should end the 221-soldier loop; the native group order still takes 100 soldiers per order and is untested at that size.
+
+## Round r33: computer defence, reclaim priority and parked convoy gardeners (as implemented)
+
+User requests (2026-10-19):
+1. With a screenshot of computer soldiers standing idle while the Dark land spread into their territory: "Add computer defensive strategy: when I'm taking and making their area dark they should be defending it, but now they do nothing. Also they should prioritize reclaiming it."
+2. "Gardeners still moving away from main group of soldiers, so you need to fix it."
+
+Source only: nothing was built, staged or tested in game when this section was written. Startup marker `; computer defence and reclaim priority r33`.
+
+### Diagnosis of pid 13612 (r32, First Dawn, player 2 Vikings, about 95,000 ticks)
+
+Marked as confirmed (code, log or map file) or inferred.
+
+**No `OFFENCE_RECLAIM` line in the whole game**, although `OFFENCE_SUPPLY ownedDarkCells` rose 0 → 141 → 553 → 1,248 (tick 75,000) → 5,805 (tick 93,000) and 8-13 gardeners were alive. The r32 model logged only when it sent a gardener, so every failure was silent. Three causes stopped every send:
+- *Only idle free gardeners reclaim (confirmed, code).* Campaigns held 4-11 of the 9-13 gardeners for about 55,000 of the 95,000 ticks (5950-16980, 36190-43280, 44770-54620, 58630-70650, 71510-77970, 79090-87620). Between campaigns the gardeners were still walking home, so not idle; some had been dropped as "left behind", others released where they stood by the HomeTimeout dissolve.
+- *The search radius was too small for First Dawn (inferred from the map file, highly likely).* Own territory was searched within `OwnRadius` 120 of the gardener, the border within 50 of it and 80 of home. The Viking home is about (95,414); the nearest Dark start cell is 194 hex away, behind a lake (x 114-150) and a wide river (x 190-235). The Dark cells the Vikings came to own lay beyond 120 of gardeners waiting at home.
+- *No defence existed at all (confirmed, code).* Reclaim kept 10 tiles (`DefenceRadius`) around every visible Dark fighter, so it never contested land the player was actively taking, and no code path sent soldiers to owned Dark land. The sweep was the only style that greened land, and it searched only 120 from home; it first became possible at tick 79,090.
+- Comparison: pid 10104 (r28, Iron Kingdom) logged reclaim because its Dark land lay within about 100 tiles of the computer home. The difference is the map geometry, not a regression.
+
+**Farm 638 (door 271,363) was attacked five times and never reached or given up.**
+- *Geometry (confirmed, map file).* A water-only breadth-first search over the installed First Dawn map gives a 695-step walk from (95,414) to the door, against a hex distance of 227: around the south-east end of the river, (482,450), (482,500), (390,508), then west along y ≈ 371. The army positions logged at return lie on that detour. The farm still counted as reachable, because the target check compared only land regions.
+- *Straight legs crossed water (confirmed, code and map).* `route()`/`legClear()` check only the citadel fire, and the convoy point on the straight line was sent without a stand check. A group order to a water cell fails the native walk-sector test, hence 15 `OFFENCE_ORDER_IGNORED ... order not executed` lines; gardener points on water got no order at all.
+- *Timers (confirmed, log).* Three marches hit `MarchTimeout` 4,000 (5950→9960, 44770→48780, 59990→64000); the assault order then took the 695-step detour and `TargetTimeout` 9,000 (counted from launch) ended them as "target not reached". A timeout avoided the target only 1,000 ticks, every relaunch came at least 3,800 ticks later, and the target was always the nearest farm by hex distance.
+
+**Iron (confirmed, log).** Iron-bar stock 8 at tick 3,000, 0 from 18,000 (briefly 1 at 33,000) while coal climbed to 40. The AI's weaponsmith used the iron: soldiers rose from 31 to 84 between ticks 18,000 and 75,000. The r29 shovel order stayed at 4 and `OFFENCE_TOOLS` counted `restores=1443` (about one per 42 ticks, 16,084-76,510) of an order no toolsmith could serve. The map has iron ore 15 tiles from the Viking start (98 cells, amount 8-15, at 85-96,385-392; read from the resource byte's high nibble in S4ModApi enum order, fish = 0 on water, iron = 2), so the AI can mine it later. Gardeners fell from 13 to 0 by tick 84,000.
+
+**Gardeners moving away from the soldiers (confirmed, code; matches the log).** Root causes in r32:
+1. *Every gardener move was a FORWARD work order.* `gather()` → `sendGardener` → FORWARD, so each convoy cell became the gardener's work centre. On arrival the native search ran around it and the gardener walked off greening Dark land along the green edge. The outbound gap sat at 15-18 against a limit of 14; the army went stop-go, and `wait` was mostly 0 because `waitSince` reset whenever the gap dipped under the limit.
+2. *A held army sent its gardeners no orders.* While holding, `gather` aimed at the formation grid around the army centre (2 × spiral offsets), whose cells the soldiers occupied; occupied cells failed and the gardener was skipped.
+3. *Re-orders ignored where the gardener actually was.* A gardener whose last ordered cell was within 2 of the new one was skipped for 600 ticks, and `ConvoyStall` was also 600, so it was dropped exactly when it would have been re-ordered.
+4. *Stragglers were sent home alone.* At tick 15,560 seven were left behind near the target while still closing in (gap 78 → 57 → 35); the player's fighters killed lone gardeners and the count fell 13 → 10 → 6 → 5 by tick 16,760.
+5. *At the target, waiting gardeners were given work.* The rear point lies in Dark land next to the target, and r32 sent waiting gardeners there with FORWARD; working gardeners were never called back. In all three large campaigns the ring never greened (0 of 24 in about 5,000 ticks) and the way home started with gap 78.
+6. *Gardeners were picked from anywhere* (gap 48 at launch), and a rally walked the army up to 279 tiles to them.
+7. *The army centre was a poor reference.* The mean of soldiers from scattered reservoirs and formation slots; the gap, the hold limit and the ORDER_IGNORED check all used it.
+
+### Native facts (file-only disassembly of the pinned exe; RVAs)
+
+Escorted gardeners:
+- *Group order 0x16A800 (CGroupMgr slot 10):* each unit gets the event `{0x11, 0xD, mode, slot, click}`; the mode is copied unchanged at 0x16A9E3/0x16A9E6. Only mode bit 8 (STOP) takes its own path (0x16A883). Pinned 0x16A9E3.
+- *Gardener order handler 0x179A80 (case 0x11 at 0x179ACD):* frees any reserved cell (0x179ACD..0x179AEF, 0x179B5E..0x179B80), checks command 0xD (0x179AF6), then tests `[event+0xC] & 4` (WATCH) at 0x179B90. WATCH pushes job **0xB0** (0x179B99) and leaves the work centre (+0x38/+0x3C) unchanged. FORWARD (and PATROL/ACCUMULATE, whose bits it ignores) makes the slot the work centre, resets the miss and slice counters and pushes job **0xAE** (0x179BA0..0x179BB2). Both store the destination `y<<16|x` at role +0x18 (0x179BC5). Pinned 0x179BAB.
+- *Jobs (`GameData/jobInfo.xml`, id table 0xC049C0; entry 0xC049D0 pinned):* 0xAE `JOB_GARDENER_BEAT_MUSHROOM` = GO_TO_POS, RESOURCE_GATHERING, SEARCH; 0xAF `JOB_GARDENER_WORK` = GO_TO_POS, WORK 31 ticks, SEARCH; 0xB0 `JOB_GARDENER_FORCE_WALK` = GO_TO_POS, WAIT. GO_TO_POS (0x1798BF) is a pure walk. The search (0x17996E → 0x179F80, give-up 0x1799B7) runs only after arrival, from the gardener's current cell, ranking cells by |c − centre|² + 2·|c − gardener|² (Dark mushrooms first) and creeping up to about 29 tiles. WAIT (0x1796A9) waits 1..16 ticks and repeats, drawing from the native logic generator `[GGM+0x5C]` (native code, not the plugin), so a WATCH gardener stands until the next order.
+- WATCH is the only order that moves a gardener without giving it work. The r32 rule "never WATCH" (it parks the gardener) is replaced: WATCH is used exactly to park held convoy gardeners, and every release is FORWARD.
+- Walking speed is still unknown: the per-type record `(race*0x46+type)*0x24` at 0x1146930 has its speed byte (+1) written only at 0x183CE1, with no direct reader found. Nothing depends on it.
+
+What darkens land and what computer soldiers attack:
+- The only run-time darkening primitive is CDarkTribe slot 3, 0xCB9A0 (SetDark 0xCBB60 with dark = 1, then smoothing 0xCBA70, which darkens every cell whose six neighbours are Dark). Callers: the Dark Gardener (CDarkGardenerRole 0x174B4F/0x174B8A, its own cell after 26 ticks of JOB_DARKGARDENER_WORK) and CShadowHerb 0x166B00 (0x166B85/0x166BF8, the herb and its 6 neighbours at growth stages; timing not decoded). The Lua debug functions `MakeDark`/`MakeGreen` (0x1C3770/0x1C3840) are not used: they would be a plugin shortcut.
+- The Dark Gardener's cell test is `flags & 0x3F == 0` (0x1750A0) and never reads the owner, so Dark Gardeners darken computer territory freely. A Dark Gardener greens one cell per 26 ticks plus walking (plus herb bursts); a computer Gardener one per 37-51 ticks. Late in pid 13612 the owned Dark cells grew about 250 per 1,000 ticks, which would need 6-10 reclaiming gardeners working all the time: killing the Dark Gardeners is the only defence that scales (inferred).
+- *Soldier targets:* sub_198180 with the warrior masks at 0xDCDC18 excludes groups 0, 1, 10, 11, 12 and 15 and requires flags 0x10000|0x2000000. Groups per type come from 0xC1A648 (via 0x181F20): Dark Gardener 52 → 7 (attacked, lowest priority; its role init 0x174A17 sets 0x32000), Warrior 29-31 → 2, Thrower 32-34 → 3, Shaman 54 → 4 (all attacked), Mushroom Farmer 53 and slave 55 → 1, Servant 56 → 0 (never attacked). The inspector checks these groups.
+- *Ranges:* an idle soldier (behaviour state 0/1) searches every 30 ticks: swordsman strike rings 1-2 and approach rings 1-13; bowman rings 4-13, approach up to 15. The 16×16 presence grid 0x12DD498 (weights copied by 0x1BB260 from 0xC1C990) opens the search, and Dark Gardeners count. WATCH soldiers (state 4) never search, and soldiers do not engage while marching, so a FORWARD order must end within about 13 tiles of the Dark unit. Soldiers idling farther than about 13 tiles from the spreading border do nothing: the likely cause of the screenshot (inferred).
+
+Why the native defence ignores the Dark Tribe:
+- *CAIAgentIntruderCombat* (sector +0xBE4, every 37 ticks, run 0x31BD0) treats as intruders only the types in the .rdata table **0xBF0438** = {46, 48, 49, 47, 50, 45} (Saboteur, Thief, Geologist, Pioneer, Gardener, Priest), three per run. No Dark type is listed, so Dark units are never intruders. Pinned 0xBF0438. It enumerates enemy units per type (`0x1144CEC + (p*0x43+type)*4`, next word +0x2A, flags & 0x3000000, not 0x8000, same land sector) and tests territory with 0x1B17E0: owner of the cell is the player, or a cell up to 4 steps along one of the six directions is (offset table 0x101BD8C..0x101BDBC, block fast path 0xEEF998). Pinned 0x1B1808. Its defenders are its own task force (sector +0x960, at most 10 swordsmen taken within 30, or the best of 5 under 40), ordered FORWARD onto the intruder and released home afterwards.
+- *CAIAgentEvalDefence* (+0xB40, every 5 ticks, 0x315C0 → 0x41EB0) weighs units of groups 2..5 within 32 of the player's own towers and castles, so natively the computer defends its towers against Dark Warriors, Throwers and Shamans (inferred) but never against Dark Gardeners (group 7) or land loss.
+- The type table is in the exe's .rdata and the lists are indexed by fixed type ids, so feeding the native agent is not possible safely. The plugin leads the defence itself, copying IntruderCombat's pattern.
+
+### Defence (`assess`, `defend`, `answer`, `hold` in `native/offence-model.hpp`; `intrusion` in `offence-native.hpp`)
+
+- *Detection (bridge, transient):* `intrusion()` walks player 1's lists for types 52, 29, 32 and 54 (the per-player per-type list above) and keeps visible, living units (class 1, flags & 0x3000000, not 0x4000000 or 0x8000) in the sector's land region that stand in or within 4 of the computer's territory (`inside()`, the owner rule of 0x1B17E0 re-implemented, never called). `scanTerritory` also reports `rise`: the growth of the player's owned Dark cells over the last full pass. No `dt::State` field was added.
+- *Threat:* at least one Dark unit, or at least 24 owned Dark cells (`DefendCells`) with a reclaimable cell. Units within `HuntKeep` 42 of a live fire centre are ignored, so a defence never chases into the citadel fire.
+- *Serious:* a reclaimable own Dark cell exists and the owned cells are at least 150 (`SeriousCells`) or rose by 40 or more in one pass (`SeriousRise`); or a Dark fighter stands within 40 of home (`SeriousHome`); or 3 or more Dark Gardeners intrude. "Reclaimable" means a workable own Dark cell outside every keep, including `FrontKeep`, in the sector's region; cells inside the keeps around the Dark base never make a threat serious (review fix: they kept every intrusion serious and attacks never came again).
+- *Start (`defend`, before any attack decision, every 40 ticks from tick 840):* an idle sector defends. After a defence it rests 300 ticks before a serious one and 1,500 before a minor one. A minor threat waits for the attack cooldown, and a second minor defence comes no sooner than 6,000 ticks after the last one, so attacks come in between. A threat of land only is declined without a free gardener within 130 of home (`LaunchReach`) or within 60 of the area (`PickReach`).
+- *Size:* the larger of 6 (`DefendMin`) and a quarter of the army (half if serious), then more until its weight is twice the Dark fighters' (2 each); the home reserve stays. Declined ("threat too strong") when even the whole army is lighter. Gardeners: 6 + soldiers/15 + own cells/100 (the last part only with reclaimable land), at most the r32 cap, taken only within `LaunchReach` of home.
+- *Recall (`answer`):* a running march or siege turns to the defence only for a serious threat, at most every 3,000 ticks (`RecallGap`), never for a siege whose ring is two-thirds green, never for land only when the campaign holds no gardeners, and only when the army outweighs the fighters (else "recall declined: threat too strong").
+- *In place (`hold`, every 40 ticks):* the soldiers stand FORWARD next to the nearest group of Dark units within 30 of the area (native combat then engages within about 13), else beside own Dark land near the army; with neither, the next area (the own Dark cell nearest the area, "next area"), and with none left the army goes home ("land clean"). Moves longer than `StageDistance` 16 are convoy steps. Gardeners get own Dark cells within 16 of the army body (FORWARD, never within 4 of a Dark fighter, never inside `GardenerKeep`); the others wait parked behind the army, away from the units. Every 150 ticks the defence adopts free gardeners within 60 of its soldiers, up to its number, never across or out of the fire. Every destination passes the r30 keep checks (`holdPoint`, `soldierKeep`, `legClear`); a fallback cell must be standable.
+- *End:* "land clean", "defence time" (6,000 ticks, `DefendTime`), "army beaten" (half the soldiers lost), "threat too strong" (Dark fighters within 30 outweigh the army), "no gardeners left", "no safe cell near the intrusion", "no way outside the fire defence". The army and gardeners go home as a convoy.
+
+### Reclaim priority (`reclaim`)
+
+- Own territory is searched on the whole map (`OwnRadius` 4096), but a free gardener goes alone only to own Dark land within 50 of itself (`ReclaimRadius`) or, standing within 130 of home, to own land within 130 of home. Land farther out belongs to the defence, so soldiers and gardeners travel together (review fix: the first r33 version sent one idle gardener alone 194 hex out).
+- While the sector defends, 8 gardeners per pass (`DefendPerPass`), else 4.
+- A pass that sends nobody now says why, every 3,000 ticks while the computer owns Dark cells: `OFFENCE_RECLAIM value=0 ... reason=none sent: no Dark cell in reach` or `none sent: no idle free gardener`.
+- A free gardener still parked (WATCH) beyond 30 of home, or an idle one beyond 130 with no own Dark land within 50, walks home when no Dark fighter is within 30 (`parked gardener sent home`, at most two per pass), unless a running defence within 60 will adopt it.
+- Reclaim still uses only gardeners no campaign holds and never changes the campaign's fields.
+
+### Unreachable targets
+
+- *Walking path (bridge `walk`/`detour`):* a breadth-first search over cells of the sector's land region (six neighbours, the region word as `region()` reads it) from the door to within 2 of home, at most `detourLimit(hex)` = 2.5 × hex + 20 steps. Cached per target identity and home for 6,000 ticks, at most one new search per game tick. An expired entry keeps its last path until its refresh runs (review fix: an unreachable farm otherwise read as reachable again for a while every 6,000 ticks); only pairs never searched are "unknown" (0). A home with no land cell within 2 also gives "unknown", never "unreachable".
+- A target whose path is longer than the limit, or has none, is unreachable. Others are scored by hex distance plus the walking detour.
+- *Failure counter (`failed`, transient per campaign):* a target fails after a march timeout more than 32 tiles from its stage, a target timeout, 3 ignored orders on it (`IgnoreLimit`) or gardeners that do not follow. The first failure avoids it 6,000 ticks (`LostAvoid`), from the second 24,000 (`LongAvoid`). A running longer avoidance is kept. Avoided or locked farms no longer forbid Hall targets.
+- *Water on straight legs:* a convoy point on unwalkable land moves to the nearest standable cell within 6 rings (`SnapRing`) outside the soldier keep.
+
+### Parked convoy (the gardener fix)
+
+- *WATCH for every escort move* (bridge `park()` = `SendWarriors(x, y, S4_MOVEMENT_WATCH, &id, 1, 1)`, one id per order): convoy steps, holding, the way home, rally hand-over, top-up joins, the rear point, the sweep rear, the defence rear and the fire guard moving a held gardener to the army. FORWARD only for a ring cell, a sweep or defence Dark cell, reclaim and the release at home. The bridge reads job 0xB0 as `escorted` and role +0x18 as the destination; reclaim treats a parked gardener (job 0xB0, task 17) as idle, as before.
+- *Re-ordered from real state* (`settled`): a gardener is sent again when it is not parked for its cell, its destination is 2+ tiles from it, or it waits more than 3 from it; at most every 30 ticks (`ConvoyResend`).
+- *Own cells:* gardeners get the odd lattice x + 2·dx + 1, y + 2·dy of the spiral, never a soldier's formation cell; a bad cell is replaced by the nearest acceptable one within 3 of it or of the point, instead of skipping the gardener.
+- *Gap from real positions:* the army body is the soldiers within max(8, 2 × spread) of the median cell; the gap is each gardener's distance to the nearest soldier of the body; ORDER_IGNORED uses the body too.
+- *A real hold:* the army stops where its body stands (the median cell when standable and outside the keep, else the nearest standable cell from `holdPoint`, else no stop order: review fix). Wait counts from the first look, and the hold ends only 3 tiles under the limit (`ConvoyHysteresis`).
+- *Never dropped in the field:* after 600 ticks with no gap improvement the army walks back to the farthest gardener ("army walks back to the gardeners"), at most 4 times per leg (`RallyLimit`), only along a clear leg outside the fire keep. After that a march fails its target ("gardeners do not follow"). Gardeners are dropped only when dead, benched by the fire guard or standing in another land region (`strays`). "gardeners left behind" no longer exists.
+- *Mustering:* a new campaign takes free gardeners only within 130 of home (`LaunchReach`); a hand-over, a rally or an adopted squad only within 60 of the army (`PickReach`).
+- *Assault leg:* a long leg from the stage to the assault cell is walked as a convoy too (a pincer's first half carries the gardeners); a direct assault with gardeners is allowed only within 20 tiles.
+- *At the target:* waiting gardeners stay parked behind the screen (WATCH greens nothing). Any held gardener without a Dark ring cell more than 16 from the nearest soldier is parked behind the screen again, working or not. At a citadel that still parks entering settlers, gardeners beyond the allowance are parked at the rear point (a working one stopped at once) instead of being sent home alone (review fix).
+- *Release:* at home only gardeners within 30 of home get home as their work centre (FORWARD); a farther one stays parked and reclaim walks it home when safe. A holding convoy on the way home gets up to twice `HomeTimeout`.
+
+### Toolsmith
+
+`shovelRestoreWhile`: no restore of the shovel order while the home economy's iron-bar stock (good 20, `stock()` → 0xD4280, read at the 250-tick evaluation) is 0; the watch still follows the byte, and the evaluation orders again once iron is in stock. An unknown stock (−1) restores as before. The start goods (`TOOL_TOTALS` in `tools/scenario-supply.cjs`: 16 iron bars, 16 coal) are unchanged.
+
+### Logs
+
+- New: `OFFENCE_DEFEND player= sector= phase= army= gardeners= units= fighters= own= rise= area=x,y reason=`. Reasons: `start: intrusion`, `start: serious intrusion`, `recall: serious intrusion`, `declined: no gardeners | no spare soldiers | threat too strong | squad not created`, `recall declined: threat too strong`; the end with phase=3 and the end reason (above). Declines are logged on a new reason, then every 3,000 ticks.
+- `OFFENCE_RECLAIM` adds `value=0 ... none sent: no Dark cell in reach | none sent: no idle free gardener` (every 3,000 ticks) and `parked gardener sent home`.
+- `OFFENCE_CONVOY` adds `army walks back to the gardeners` and `gardeners do not follow`; `gardeners left behind` is gone.
+- `OFFENCE_AVOID` adds `orders not executed`, `target not reached` and `gardeners do not follow`.
+- `OFFENCE_TOOLS` adds `no restore while no iron bar is in stock`.
+- `OFFENCE_FRONT ... reason=next area` when a defence moves on.
+
+### Checks (offline)
+
+- `native/offence-tests.cpp` (all pass):
+  - `convoyField`: the field numbers (gap 15-18 against a limit of 14; the way home with gardeners 57-78 behind). Against the r32 model it fails on wait = 0 and on gardeners left behind; now every gardener is ordered within the first resend, none is dropped or sent home alone, and all ten reach home with the army.
+  - `defending`: defence start, minor vs serious, recall and its two-thirds-green rule, "threat too strong", alternation with attacks, the fire field (151 own cells inside `FrontKeep` give a minor threat, 13 Temple guards inside `HuntKeep` do not send a defence home).
+  - `reclaimRegression` (pid 13612: no free gardener ever beyond 130 of home, a defence starts and cleans the land; "declined: no gardeners"; a defence adopting gardeners at the area), `unreachable`, `reviewR33`, `defenceSoak`.
+  - Updated: the hunt hand-over (limit 60), the direct-assault distance, the convoy rules and the walking-soak bounds.
+  - `convoySoak` (all six styles, armies up to 117, gardeners as fast or 50 % slower): no deaths, the gap at most 1 over the limit (r32 by its own metric: up to 22 against 14-15), no gardener without a ring cell more than 17 from the nearest soldier, every soak with park (WATCH) orders.
+  - `defenceSoak`: deaths 0, one defence, own Dark land 469 → 0, never over the convoy limit, waiting and working gardeners within 10-11 of the nearest soldier, last return "land clean".
+  - Each of the seven review fixes was reverted once in a scratch copy, and a test failed every time.
+- All other model tests and `-fsyntax-only` of `dark-tribe.cpp` pass.
+- `tools/inspect-offence.py` passes: new pins 0x16A9E3, 0x179BAB, 0xC049D0, 0x1B1808 and 0xBF0438; the Dark unit groups (Gardener 7, Warrior 2, Thrower 3, Shaman 4, Mushroom Farmer 1); the jobInfo FORCE_WALK steps (walk, then wait); source contracts of every r33 rule. `research/offence-native-checks.json`: 318 instruction checks, 96 signature regions.
+
+### Limits (r33)
+
+- Staged on 2026-10-19: the full `python tools/workflow.py` passed and the staged DLL contains `computer defence and reclaim priority r33`. Not verified in game.
+- *WATCH order:* S4ModApi passes the mode through unchanged (`mod-integration.md` §2.1) and the handler is pinned, but parked-then-wait gardeners have never been seen in game.
+- *Combat:* soldiers engaging Dark units within about 13 tiles of their FORWARD cell is a strong inference from the native tables, not verified. Dark Gardeners have 100 health against a level-1 swordsman's 10 damage per hit.
+- *Walking search:* no offline test of the in-game breadth-first search; a mis-read land-region word could wrongly mark targets unreachable. A never-searched target is still launched on as "unknown".
+- *Defence strength:* while reclaimable own Dark land stays at 150 cells or more, serious defences can repeat 300 ticks apart and attacks then mostly wait. That is the requested priority but may be too strong; tune from field logs.
+- *After a load:* the defence style is not saved; the squad is adopted as a raid or an assault (as every mod squad), and a serious threat can recall it again.
+- *Defence end:* "land clean" can be reported while a few Dark cells still lie under the computer's own soldiers; free gardeners reclaim those afterwards.
+- *Iron:* the scenario start goods are unchanged. Gardener replacements still depend on the AI mining and smelting iron that its weaponsmith also uses.
+- *Speed:* walking speed per settler type is still assumed equal; target scoring by walking detour has no field check.
 
 ## Round r32: scaled styles and protected convoy (as implemented)
 
@@ -197,7 +476,7 @@ User request: the computers' economies should make shovels when Gardeners are mi
 | Map / player | Toolsmith | Entrance | Piles (good x amount @ cell; 20 iron bar, 10 coal, 18 hammer) | Ground |
 |---|---|---|---|---|
 | First Dawn, Vikings (p2) | new (114,440) | (115,442) | 20x8@(120,442) 20x8@(109,436) 10x8@(121,444) 10x8@(121,446) 18x2@(120,448) | footprint plus two-cell border prepared as grass at height 10, like the map's other prepared Viking buildings; step 9 (those reach 24) |
-| Iron Kingdom, Vikings (p2) | the map's own (523,463), unchanged | (524,465) | 20x8@(529,465) 20x8@(518,459) 10x8@(530,467) 10x8@(530,469) | unchanged |
+| Iron Kingdom, Vikings (p2) | the map's own (523,463), unchanged | (524,465) | 20x8@(529,465) 20x8@(518,459) 10x8@(530,467) 10x8@(530,469); r40: 18x2 beside the entrance (`tools/test-iron-kingdom.cjs` checks it) | unchanged |
 | The Alliance, Romans (p2) | new (137,383) | (139,385) | 20x8@(144,385) 20x8@(139,379) 10x8@(145,387) 10x8@(132,378) 18x2@(132,380) | core levelled to 11 as the r28 barracks, step 7 (map maximum 11), 1 object cleared |
 | The Alliance, Vikings (p3) | new (382,96) | (383,98) | 20x8@(388,99) 20x8@(377,92) 10x8@(388,97) 10x8@(389,101) 18x2@(389,103) | core levelled to 7, step 6, 42 objects cleared |
 | The Alliance, Mayas (p4) | new (298,285) | (301,287) | 20x8@(304,288) 20x8@(305,287) 10x8@(305,290) 10x8@(301,282) 18x2@(306,289) | core levelled to 2, step 6, 6 objects cleared |

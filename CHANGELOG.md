@@ -2,9 +2,49 @@
 
 What changed for players, newest first. The detailed development journal is [MODLOG.md](MODLOG.md).
 
-The version stays **0.2.15** while updates come as numbered rounds. The mod's startup line in `evidence\v02-runtime.log` (the line that starts with "Pinned native rise") ends with the latest round's name, so you can tell which update you are running (for example `... scaled styles and protected convoy r32`). Updates marked *not yet play-tested* passed every offline check but have not been tried in a real game yet.
+The version stays **0.2.15** while updates come as numbered rounds. The mod's startup line in `evidence\v02-runtime.log` (the line that starts with "Pinned native rise") ends with the latest round's name, so you can tell which update you are running (for example `... computer defence and reclaim priority r33`). Updates marked *not yet play-tested* passed every offline check but have not been tried in a real game yet.
 
 ## 0.2.15 updates (October 2026)
+
+### r43: Computers keep a working population (*not yet play-tested*)
+- A computer player no longer turns its last carriers into soldiers. It keeps a pool of free settlers that grows with its town (15 plus one per two buildings), so transport and construction go on, and new soldiers come from new houses.
+
+### r42: Alt+9 shows the whole map (*not yet play-tested*)
+- Press Alt+9 in a running map to see the whole map, enemy units and buildings included; press it again to go back to the normal fog. Saves are not affected.
+
+### r41: Manacopters no longer heal themselves (*not yet play-tested*)
+- A Manacopter standing on Dark land used to go back to full health every second, so enemies could never finish one off on the ground. Manacopters now keep their damage; only a new one starts at full health.
+
+### r40: Iron Kingdom's toolsmith gets hammers (*not yet play-tested*)
+- The Viking toolsmith on Iron Kingdom now starts with two hammers next to it, like the toolsmiths on the other maps. Without them the Vikings could not replace a lost smith, made no more shovels and therefore no more Gardeners, and stopped attacking for good. New Iron Kingdom games only.
+
+### r39: Dark Gardeners really get out of the Manacopter (*not yet play-tested*)
+- Dark Gardeners dropped from a Manacopter used to stay half-inside: they could not be clicked properly and nobody could attack them. They now step out like soldiers do, can be selected normally and can be fought.
+
+### r38: armies no longer turn back in the middle of a march (*not yet play-tested*)
+- On First Dawn the Viking army turned back after walking part of the way around the lake, because its straight-line distance to the goal grew while it walked. Progress is now measured along the real route.
+- A big siege near your Temple or Fortress is no longer called off because one or two soldiers stepped into the fire line; they are just moved back out.
+
+### r37: computers attack far more often and pick their targets sensibly (*not yet play-tested*)
+- The first attack comes within 2-4 minutes, a big enough army never waits for luck, and the next attack follows a few hundred ticks after the army is home. An army that cannot reach a farm in time takes the next one from where it stands instead of walking home.
+- Targets are chosen by the real walking distance from where the army is, and groups of farms are taken one after the other; no more marching across the map past nearer farms.
+- Taking back their own Dark land no longer stops the computers attacking: while an attack is possible, a small escort reclaims land between attacks, and only your fighters in their territory call an attack back home.
+- Computer Gardeners left far away are called home and replaced, so attacks keep coming in long games.
+
+### r36: extra log lines for the fire field (*not yet play-tested*)
+- No gameplay change. The log now records every computer soldier and Gardener that turns back at a Temple's or Fortress's fire field, and the routes the computers plan around it, to find out why their Gardeners get lost there.
+
+### r35: reclaimed land goes dark again, faster computer armies (*not yet play-tested*)
+- Land you had turned Dark and a computer turned green again no longer stays lit for good. It goes back to the normal fog unless your units can see it. Saves where this happened heal a few seconds after loading.
+- Computer armies now march at full walking speed instead of stopping every few steps for their Gardeners. The Gardeners follow behind; near the target the army waits for them only briefly (about 20 seconds at normal speed) and then attacks anyway, and late Gardeners join behind the soldiers.
+
+### r34: fixed a crash when clicking a new Dark building site (*not yet play-tested*)
+- Clicking a Dark building site right after placing it could crash the game a few seconds into a map. Sites of every kind can now be clicked at any time.
+
+### r33: computers defend their land, Gardeners stay with the soldiers (*not yet play-tested*)
+- The computers now defend their territory. When your Dark Gardeners, Warriors, Throwers or Shamans turn their land Dark, they send soldiers together with their own Gardeners: the soldiers go for your units and the Gardeners turn the land green again, area by area. Taking back their land now comes before attacking you; if you keep darkening it, they defend more and attack less, and a big intrusion calls a running attack back home.
+- Gardeners travelling with soldiers no longer wander off. They now walk to their place next to the soldiers and wait there instead of greening Dark land along the way. If they fall behind, the soldiers wait or walk back for them; no Gardener is sent home alone any more. At a farm, the Gardeners wait behind the soldiers until it is safe to start.
+- Computers give up targets they cannot reach (for example a farm behind a river) instead of marching at them again and again, and they choose targets by the real walking distance.
 
 ### r32: bigger attacks in every style, protected Gardeners (*not yet play-tested*)
 - Every attack style now grows with the computer's army: raids take a third of it (at least 10), hunts half (at least 16), sweep escorts a quarter (at least 8); assaults, pincers and allied joins take the whole army. Each style also brings one more Gardener per 15 soldiers, and big computers keep up to 20 Gardeners alive instead of 12.

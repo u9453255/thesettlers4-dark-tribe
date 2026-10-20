@@ -37,7 +37,7 @@
   "vikingBuildings": 83,
   "vikingUnits": 161,
   "vikingGardeners": 8,
-  "vikingGoods": 26,
+  "vikingGoods": 27,
   "addedBarracks": {
     "x": 441,
     "y": 358,
@@ -126,6 +126,12 @@
       "amount": 8,
       "x": 530,
       "y": 469
+    },
+    {
+      "good": 18,
+      "amount": 2,
+      "x": 529,
+      "y": 471
     }
   ],
   "rejectedSupplyMutations": 15,
