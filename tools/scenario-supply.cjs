@@ -10,7 +10,7 @@
 // and bits 4..7 flags (0x40 Dark land), byte 3 as authored.
 const assert=require('assert');
 const {clearObjectCell}=require('./scenario-terrain.cjs');
-const GOOD={BATTLEAXE:5,BLOWGUN:6,BOW:8,COAL:10,HAMMER:18,IRONBAR:20,SHOVEL:31,SWORD:34};
+const GOOD={BATTLEAXE:5,BLOWGUN:6,BOW:8,COAL:10,HAMMER:18,IRONBAR:20,SHOVEL:31,STONE:32,SWORD:34};
 const PILE_MAX=8,FREE_PILE=0xFE,TOOLSMITH=21,BARRACKS=24,CARRIER=1;
 // Toolsmith start supply (r29). A TOOLSMITH (S4_BUILDING_TOOLSMITH 21, the map's building type byte) makes a tool
 // only while one is ordered (per-economy order bytes eco+0x348, set by net 0x13A9 through 0xD6A90 and consumed by
@@ -59,6 +59,9 @@ function area(N,mask,x,y,halo) {
 // keeps every step to the unchanged neighbours within the steepest step next to the map's own level cells
 // (measured by authoredGround: dark07 11, AO_trojan10 12).
 const MINES=new Set([14,15,16,17,18]);
+// r45: mines stand on mountain ground 32; the map resource byte (chunk 6 byte 3) is S4_RESOURCE_ENUM: STONEMINE 81..96
+// (amount 1..16; COAL 17..32, IRON 33..48, GOLD 49..64 under the authored mines of AO_trojan10).
+const STONE_MINE=14,MOUNTAIN=32,RESOURCE_STONEMINE=[81,96];
 // siteFor's flat-site preference (documented bound): a site whose ground (its levelled cells and their one-cell
 // ring) spans more than FLAT_SPAN height units gives way to a flatter valid site within FLAT_RADIUS rings of the
 // search centre. The ring counts because it bounds the step levelling leaves next to the building.
@@ -201,6 +204,34 @@ function siteFor({N,land,objects,owner,mask,door,level=mask,near:[px,py],blocked
   if(flattest)return flattest;
   throw Error('No site for a building of player '+owner+' near ('+px+','+py+')');
 }
+// r45: a mine site like the authored mines of AO_trojan10 (types 14..18): the whole footprint on mountain ground 32
+// owned by `owner`, no object, no building/keep-clear flag (0x18), not Dark, off every footprint and its one-cell halo,
+// off units and piles; every blocked core cell on the wanted resource (map resource byte `low`..`high`); the entrance
+// owned and reachable from the start. Nearest ring first, the most resource under the core wins within a ring. A mine
+// is not levelled (the authored ones keep their mountain heights).
+function mineSite({N,land,objects,owner,mask,block,door,near:[px,py],blocked,units,piles,seen,low,high,radius=30}) {
+  const fits=(x,y)=>{
+    for(const [dx,dy] of mask) {
+      const cx=x+dx,cy=y+dy,k=cy*N+cx,at=4*k;
+      if(cx<2||cy<2||cx>=N-2||cy>=N-2||objects[at+1]!==owner||land[at+1]!==MOUNTAIN||objects[at]||(objects[at+2]&0x18)||(land[at+2]&64)
+        ||blocked.has(k)||units.has(k)||piles.has(k))return 0;
+    }
+    let stone=0;
+    for(const [dx,dy] of block){const v=objects[4*((y+dy)*N+x+dx)+3];if(v<low||v>high)return 0;stone+=v-low+1;}
+    const k=(y+door[1])*N+x+door[0];
+    return objects[4*k+1]===owner&&seen[k]?stone:0;
+  };
+  for(let r=0;r<=radius;r++) {
+    let best=null;
+    for(let y=py-r;y<=py+r;y++)for(let x=px-r;x<=px+r;x++) {
+      if(Math.max(Math.abs(x-px),Math.abs(y-py))!==r)continue;
+      const stone=fits(x,y);
+      if(stone&&(!best||stone>best.stone))best={x,y,door:[x+door[0],y+door[1]],ring:r,stone};
+    }
+    if(best)return best;
+  }
+  throw Error('No mine site of player '+owner+' near ('+px+','+py+')');
+}
 // Clear objects and their flags on the footprint and its one-cell halo (the landscape is left to levelSite).
 function clearSite(N,objects,mask,x,y) {
   let objectsCleared=0;
@@ -280,6 +311,23 @@ function checkSite({N,land,objects,record,mask,door,others,maskOf,units,goods,st
   assert(objects[4*k+1]===owner&&reachable(N,land,objects,owner,start)[k],'Added entrance not reachable from the start');
   return {x,y,entrance};
 }
+// r45 check of an added mine (mineSite rules; with `sourceLand` also its ground untouched). Returns {x,y,entrance,stone}.
+function checkMine({N,land,objects,sourceLand,record,mask,block,door,others,maskOf,units,goods,start,low,high}) {
+  const x=record.readUInt16LE(0),y=record.readUInt16LE(2),owner=record[5];
+  assert(record.subarray(6).every(v=>v===0),'Added mine carries garrison bytes');
+  const blocked=footprintCells(N,others,maskOf,1),unitCells=recordCells(N,units,6),pileCells=recordCells(N,goods,8);
+  for(const k of area(N,mask,x,y,0)) {
+    const at=4*k;
+    assert(objects[at+1]===owner&&land[at+1]===MOUNTAIN&&!objects[at]&&!(objects[at+2]&0x18)&&!(land[at+2]&64),'Added mine not on clear owned mountain');
+    assert(!blocked.has(k)&&!unitCells.has(k)&&!pileCells.has(k),'Added mine on another footprint, a unit or a pile');
+    if(sourceLand)assert(land[at]===sourceLand[at]&&land[at+2]===sourceLand[at+2],'Mine ground changed');
+  }
+  let stone=0;
+  for(const [dx,dy] of block){const v=objects[4*((y+dy)*N+x+dx)+3];assert(v>=low&&v<=high,'Added mine core off its resource');stone+=v-low+1;}
+  const entrance=[x+door[0],y+door[1]],k=entrance[1]*N+entrance[0];
+  assert(objects[4*k+1]===owner&&reachable(N,land,objects,owner,start)[k],'Added mine entrance not reachable from the start');
+  return {x,y,entrance,stone};
+}
 // An added building on level ground: every `level` cell at the authored (source) height of its hotspot, no
 // step above `maxStep` (authoredGround().step) from them to a neighbour outside, and the shading of those cells
 // and of the cells above and below them derived from the new heights (shadeOf).
@@ -327,6 +375,6 @@ function checkCarriers({N,land,objects,units,from,owners,count,buildings,maskOf,
   for(const owner of owners)assert(found[owner]===count,'Carriers of player '+owner);
   return found;
 }
-module.exports={GOOD,PILE_MAX,FREE_PILE,TOOLSMITH,BARRACKS,CARRIER,TOOL_INPUTS,TOOL_HAMMERS,TOOL_TOTALS,TOOL_GOODS,placeToolsmithPiles,pileTotals,steps,freeCell,reachable,footprintCells,recordCells,pileList,pileByte7,
+module.exports={mineSite,checkMine,STONE_MINE,MOUNTAIN,RESOURCE_STONEMINE,GOOD,PILE_MAX,FREE_PILE,TOOLSMITH,BARRACKS,CARRIER,TOOL_INPUTS,TOOL_HAMMERS,TOOL_TOTALS,TOOL_GOODS,placeToolsmithPiles,pileTotals,steps,freeCell,reachable,footprintCells,recordCells,pileList,pileByte7,
   pileRecord,buildingRecord,unitRecord,MINES,FLAT_SPAN,FLAT_RADIUS,SHADE,shadeOf,edgeStep,heightSpan,authoredGround,levelSite,siteFor,clearSite,placePiles,describePile,
   checkPiles,checkSite,checkLevel,checkLandscape,checkCarriers};

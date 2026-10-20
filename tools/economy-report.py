@@ -38,6 +38,7 @@ GOODS = ['log', 'board', 'stone', 'ironore', 'coal', 'ironbar', 'sword', 'bow', 
 FIXED = ['ms', 'pid', 'tick', 'player', 'eco', 'population', 'carriers', 'busy', 'idle', 'reserve', 'keep', 'housing', 'houses_s',
          'houses_m', 'houses_b', 'buildings', 'sites', 'barracks', 'toolsmiths', 'weaponsmiths', 'ironmines', 'coalmines',
          'ironsmelters', 'soldiers', 'leaders', 'builders', 'diggers', 'gardeners'] + GOODS
+OPTIONAL = ['tsout', 'tsin', 'tsworker']  # r46 toolsmith columns; older files lack them (-1)
 SAMPLE = 500  # ticks between two rows of one computer (dtledger::EcoEvery)
 
 
@@ -53,6 +54,11 @@ def load(path):
                 row = {key: int(raw[key]) for key in FIXED}
             except (KeyError, TypeError, ValueError):
                 continue  # a torn line from a crashed process
+            for key in OPTIONAL:
+                try:
+                    row[key] = int(raw.get(key) or -1)
+                except ValueError:
+                    row[key] = -1
             row['settlers_by_type'] = parse_list(raw.get('settlers') or '')
             row['ready_by_type'] = parse_list(raw.get('ready') or '')
             row['sites_by_type'] = parse_list(raw.get('sites_by_type') or '')
@@ -114,9 +120,12 @@ def analyse(samples):
     drained = longest(runs(eco, lambda s: s['idle'] < 5))
     if drained and drained[2] >= 3:
         flags.append(f'carriers drained (idle < 5) for {drained[1] - drained[0] + SAMPLE} ticks from tick {drained[0]} to {drained[1]}')
-    below = sum(1 for s in eco if s['keep'] > 0 and s['reserve'] < s['keep'])
+    below = sum(1 for s in eco if s['keep'] > 0 and s['reserve'] < min(s['keep'], s['carriers']))
     if below:
         flags.append(f'reserve below keep in {below} samples (the r43 floor did not hold)')
+    capped = sum(1 for s in eco if s['keep'] > 0 and s['carriers'] <= s['keep'])
+    if capped * 2 >= len(eco):
+        flags.append(f'no carrier above the keep in {capped} of {len(eco)} samples: nothing can be drafted or recruited (the setter caps the reserve at the carrier total)')
     drafted = 0
     for prev, cur in zip(eco, eco[1:]):
         if cur['soldiers'] > prev['soldiers'] and prev['keep'] > 0 and prev['carriers'] < prev['keep']:
@@ -146,6 +155,16 @@ def analyse(samples):
     dry = sum(1 for s in tools if s['shovel'] == 0 and s['ironbar'] == 0)
     if tools and dry * 2 >= len(tools):
         flags.append(f'toolsmith starved (no shovel and no iron bar) in {dry} of {len(tools)} samples')
+    smith = [s for s in samples if s['toolsmiths'] > 0 and s['tsout'] >= 0]
+    clog = sum(1 for s in smith if s['tsout'] >= 8)
+    if smith and clog * 4 >= len(smith):
+        flags.append(f'toolsmith output full (8 or more tools lying there) in {clog} of {len(smith)} samples: nothing more is made')
+    unmanned = longest(runs(smith, lambda s: s['tsworker'] == 0))
+    if unmanned and unmanned[2] >= 3:
+        flags.append(f'toolsmith without a worker for {unmanned[2]} samples from tick {unmanned[0]}')
+    dry_in = longest(runs(smith, lambda s: s['tsin'] == 0 and s['ironbar'] + s['coal'] > 4))
+    if dry_in and dry_in[2] >= 6:
+        flags.append(f'toolsmith input empty while iron or coal is in stock for {dry_in[2]} samples from tick {dry_in[0]}')
     window = [s for s in samples if s['tick'] >= last['tick'] - 30000]
     if len(window) >= 20 and span >= 30000:
         growth = window[-1]['population'] - window[0]['population']
@@ -169,7 +188,8 @@ def describe(pid, index, player, samples):
              f'  carriers min {min(carriers)} median {int(statistics.median(carriers))} last {last["carriers"]}; idle min {min(idle)} last {last["idle"]}; reserve {last["reserve"]} keep {last["keep"]}',
              f'  soldiers {first["soldiers"]} -> {last["soldiers"]} (leaders {last["leaders"]}), gardeners {last["gardeners"]}, builders {last["builders"]}, diggers {last["diggers"]}',
              f'  buildings {first["buildings"]} -> {last["buildings"]}, sites median {int(statistics.median(sites))} last {last["sites"]}; barracks {last["barracks"]} toolsmiths {last["toolsmiths"]} weaponsmiths {last["weaponsmiths"]} ironmines {last["ironmines"]} coalmines {last["coalmines"]} smelters {last["ironsmelters"]}',
-             '  stock at the end: ' + ' '.join(f'{name}={last[name]}' for name in GOODS)]
+             '  stock at the end: ' + ' '.join(f'{name}={last[name]}' for name in GOODS),
+             f'  toolsmith at the end: output {last["tsout"]} of 8, lowest input {last["tsin"]}, worker {last["tsworker"]} (-1 = no toolsmith or old file)']
     if zero:
         lines.append('  goods at 0 in 80% of the samples: ' + ', '.join(zero))
     ready = ', '.join(f'{BUILDINGS.get(t, t)}x{n}' for t, n in sorted(last['ready_by_type'].items()))
@@ -181,14 +201,17 @@ def describe(pid, index, player, samples):
 
 
 def main(argv):
-    args = [a for a in argv if not a.startswith('--')]
-    path = Path(args[0]) if args else ROOT / 'evidence/v02-economy.csv'
     want_pid = want_player = None
+    values = set()
     for i, a in enumerate(argv):
         if a == '--pid':
             want_pid = int(argv[i + 1])
+            values.add(i + 1)
         if a == '--player':
             want_player = int(argv[i + 1])
+            values.add(i + 1)
+    args = [a for i, a in enumerate(argv) if not a.startswith('--') and i not in values]
+    path = Path(args[0]) if args else ROOT / 'evidence/v02-economy.csv'
     if not path.exists():
         print(f'no telemetry at {path}; play with the r44 build first')
         return 1

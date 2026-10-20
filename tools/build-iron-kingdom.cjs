@@ -11,7 +11,7 @@ const {execFileSync}=require('child_process');
 const {gameDir,python}=require('./project-paths.cjs');
 const {removeFarmsInFire,assertNoFarmInFire,FarmLock,FARM}=require('./citadel-fire.cjs');
 const {GOOD,TOOLSMITH,BARRACKS,reachable,footprintCells,recordCells,pileList,pileByte7,buildingRecord,FLAT_SPAN,FLAT_RADIUS,authoredGround,levelSite,siteFor,clearSite,placePiles,
-  placeToolsmithPiles,describePile}=require('./scenario-supply.cjs');
+  placeToolsmithPiles,describePile,mineSite,STONE_MINE,RESOURCE_STONEMINE}=require('./scenario-supply.cjs');
 const project=path.resolve(__dirname,'..'),game=process.argv[2]&&!process.argv[2].startsWith('--')?process.argv[2]:gameDir();
 const SOURCE_SHA256='05f34cbb22aad2e8e390cf9f3d38dcd13e3513d69ccfa6f54c67450fc0b7b122';
 const DARK_START={x:378,y:134},VIKING_START={x:475,y:353},N=576;
@@ -32,7 +32,8 @@ const GARDENERS=8;
 // footprint at the hotspot height, shading recomputed); a site whose ground (footprint and its one-cell ring)
 // spans more than FLAT_SPAN gives way to the flattest one within FLAT_RADIUS cells (siteFor).
 const BARRACKS_NEAR=[441,358];
-const SUPPLY=[GOOD.SWORD,GOOD.SWORD,GOOD.BOW,GOOD.BATTLEAXE,GOOD.SHOVEL,GOOD.SHOVEL];
+// r45: STONE x2 (16 stone) as well, so the first house or tower can start before the new stone mine delivers.
+const SUPPLY=[GOOD.SWORD,GOOD.SWORD,GOOD.BOW,GOOD.BATTLEAXE,GOOD.SHOVEL,GOOD.SHOVEL,GOOD.STONE,GOOD.STONE];
 // Toolsmith start buffer (r29): the kingdom's own TOOLSMITH (source record, unchanged) gets IRONBAR x16 and COAL x16
 // beside its entrance, so the plugin's shovel orders are made before the iron chain delivers. r40: HAMMER x2 as well,
 // like the other maps: the kingdom starts with 2 SMITHs and 15 hammers, but in the field (pid 8520) the toolsmith lost
@@ -125,6 +126,18 @@ const barracksSite=siteFor({N,land,objects,owner:2,mask:masks._viking[BARRACKS],
 const barracksObjectsCleared=clearSite(N,objects,masks._viking[BARRACKS],barracksSite.x,barracksSite.y);
 const barracksGround=levelSite(N,land,barracksLevel,barracksSite.x,barracksSite.y);
 buildings.push(buildingRecord(barracksSite.x,barracksSite.y,BARRACKS,2));
+// r45: a Viking STONEMINE on the stone mountain west of the coal mines (field pid 3572, research/AI_OFFENCE_0215.md
+// Round r45): the kingdom had no stone source at all; its 4 start stones were spent by tick 30,000, and with 0 stone
+// nothing that needs stone (houses 3, towers, a stonecutter hut 3, a stone mine 1) could ever be built again, so the
+// population only fell. The mountain x 442..461, y 422..440 carries S4_RESOURCE_STONEMINE (resource byte 81..96, the
+// only mountain stone; the 217 scattered grey rocks are cuttable, but a stonecutter hut costs 3 stone). The mine stands like the authored mines:
+// whole footprint on mountain 32, core on the resource, entrance reachable, ground untouched. STONE_NEAR is the richest
+// site of the survey (amount 15 under all 16 core cells).
+const STONE_NEAR=[448,428];
+const mine=mineSite({N,land,objects,owner:2,mask:masks._viking[STONE_MINE],block:blockOf(STONE_MINE,2),door:masks._vikingDoors[STONE_MINE],near:STONE_NEAR,
+  blocked:footprintCells(N,Buffer.concat(buildings),maskOf,1),units:recordCells(N,allUnits,6),piles:recordCells(N,Buffer.concat(goods),8),
+  seen:reachable(N,land,objects,2,vikingStart),low:RESOURCE_STONEMINE[0],high:RESOURCE_STONEMINE[1]});
+buildings.push(buildingRecord(mine.x,mine.y,STONE_MINE,2));
 const supply=placePiles({N,land,objects,owner:2,anchor:vikingStart,goods:SUPPLY,byte7:pileByte7(Buffer.concat(goods)),
   blocked:footprintCells(N,Buffer.concat(buildings),maskOf,1),units:recordCells(N,allUnits,6),piles:pileList(Buffer.concat(goods)),
   seen:reachable(N,land,objects,2,vikingStart)});
@@ -167,10 +180,12 @@ fs.writeFileSync(path.join(project,'research/iron-kingdom-build.json'),JSON.stri
     ground:{levelled:ground.mode,height:barracksGround.height,originalSpan:barracksGround.span,groundSpan:barracksSite.groundSpan,maxSpan:FLAT_SPAN,flatRadius:FLAT_RADIUS,
       cells:barracksGround.cells,heightsChanged:barracksGround.changed,shadingsChanged:barracksGround.shaded,step:barracksSite.step,authoredStep:ground.step,
       authoredBuildings:ground.buildings,searchRing:barracksSite.ring}},
-  weaponPiles:supply.filter(r=>r[4]!==GOOD.SHOVEL).map(describePile),shovelPiles:supply.filter(r=>r[4]===GOOD.SHOVEL).map(describePile),
+  weaponPiles:supply.filter(r=>r[4]!==GOOD.SHOVEL&&r[4]!==GOOD.STONE).map(describePile),shovelPiles:supply.filter(r=>r[4]===GOOD.SHOVEL).map(describePile),
+  stoneMine:{type:STONE_MINE,x:mine.x,y:mine.y,entrance:mine.door,ring:mine.ring,stone:mine.stone},stonePiles:supply.filter(r=>r[4]===GOOD.STONE).map(describePile),
   toolsmith,toolsmithPiles:toolInputs.map(describePile),extraCarriers:0,fireCleanStart:{farmLock:FarmLock,removedFarms:fire.removed},runtimeVerified:false},null,2));
 console.log(`Built Iron Kingdom: Dark camps merged (${count(buildings,1)} buildings, ${count(units,1)} units); Viking kingdom ${count(buildings,2)} buildings, ${garrisoned} manned towers, ${army.length} field soldiers, ${gardeners.length} gardeners ${gardeners.map(u=>`(${u.readUInt16LE(0)},${u.readUInt16LE(2)})`).join(' ')}; Trojans removed`);
 console.log(`Viking barracks at (${barracksSite.x},${barracksSite.y}), entrance (${barracksSite.door}), ${barracksObjectsCleared} objects cleared, `+
   `${ground.mode} levelled at height ${barracksGround.height} (span ${barracksGround.span}, ground span ${barracksSite.groundSpan}, ${barracksGround.changed} heights and ${barracksGround.shaded} shadings changed, step ${barracksSite.step} <= ${ground.step}); supply piles (good x amount) ${supply.map(describePile).map(p=>`${p.good}x${p.amount}@(${p.x},${p.y})`).join(' ')}`);
 console.log(`Viking toolsmith (source) at (${toolsmith.x},${toolsmith.y}), entrance (${toolsmith.entrance}); inputs ${toolInputs.map(describePile).map(p=>`${p.good}x${p.amount}@(${p.x},${p.y})`).join(' ')}`);
+console.log(`Viking stone mine at (${mine.x},${mine.y}), entrance (${mine.door}), ring ${mine.ring}, stone ${mine.stone} under the core; stone piles ${supply.filter(r=>r[4]===GOOD.STONE).map(describePile).map(p=>`${p.good}x${p.amount}@(${p.x},${p.y})`).join(' ')}`);
 console.log(`Clean start: ${fire.removed.length} Dark farm(s) inside a Temple/Fortress fire field removed (FarmLock ${FarmLock}) `+fire.removed.map(f=>`(${f.x},${f.y}) Euclid ${f.euclid} from (${f.citadel.x},${f.citadel.y})`).join(' '));

@@ -1,5 +1,26 @@
 # Experiment journal
 
+## Round r47: specialist room in the carrier reserve (2026-10-20, still 0.2.15)
+
+- Field reading of r46 (pid 18132, game 2): a mass death at tick 44,000 took every builder; carriers fell to the keep and no builder, digger or gardener could be made for 66,000 ticks (the native specialist processor sub_D57D0 needs reserve < carriers - busy, the same bar as the barracks), so no house was built and the kingdom froze.
+- Fix (research/AI_OFFENCE_0215.md Round r47): while builders are below 6, diggers below 5 or the plugin's gardeners are missing, the hook stores a reserve of at most carriers - room (`specialistRoom`, at most 14) and withholds the same room from the barracks through the sector's +0x1E byte, so the specialists get those carriers first. Without a shortage the keep behaves as in r45. `CARRIER_RESERVE` logs the room and the builder/digger counts.
+- Status: built, model-tested and staged with the full offline workflow on 2026-10-20 (all steps passed); not yet play-tested. Startup marker: `...; toolsmith output watch r46; specialist room r47`.
+
+## Round r46: toolsmith output watch (2026-10-20, still 0.2.15)
+
+- Field reading of r45 (pid 2476): stone fixed (mine delivering from tick 500, two AI stonecutters later, 83 -> 131 buildings), but the gardeners died out by tick 48,000 and no shovel was ever made again: the toolsmith made two tools in 120,000 ticks with iron and coal in stock.
+- Cause (research/AI_OFFENCE_0215.md Round r46): the production gate sub_14CDC0 makes nothing while the toolsmith's seven output piles hold 8 or more goods in total; six pickaxes and a hammer the AI had ordered and nobody took filled it.
+- Fix: `offenceToolWatch` clears the order of every non-shovel tool that already lies in an output pile (never shovels, never continuous orders), so the AI's re-sent orders cannot fill the capacity; `OFFENCE_TOOLSMITH` diagnostics log the whole gate while shovels are owed; telemetry columns `tsout,tsin,tsworker` and report flags. Pins for the gate, the pile lists, the CPile count and the buildingInfo pile types.
+- Status: built, model-tested and staged with the full offline workflow on 2026-10-20 (all steps passed); not yet play-tested. Startup marker: `...; economy-only keep and Iron Kingdom stone r45; toolsmith output watch r46`.
+
+## Round r45: economy-only keep and Iron Kingdom stone (2026-10-20, still 0.2.15)
+
+- First telemetry reading (pid 3572, Iron Kingdom): the r43 keep (58 from 86 "buildings", 28 of them decorations and 20 towers) equalled the carrier total, and the native setter caps the reserve at that total, so nothing was drafted or recruited after tick 20,000; and the kingdom could not grow because it has no stone source (no stonecutter, no stone mine; stone 0 from tick 30,000; never a residence site).
+- Fix 1: `economyBuilding` (offence-model.hpp): the keep counts only economy buildings (no military 45..48, no eye-catchers 64..75); Iron Kingdom's keep becomes 34 instead of 58 (test `carrierReserveFloor`).
+- Fix 2: Iron Kingdom builder adds a Viking STONEMINE at (448,428) on the kingdom's only stone resource (`mineSite`/`checkMine` in scenario-supply.cjs) and STONE x2 piles by the start; the map test checks both and rejects wrong mines.
+- Details: research/AI_OFFENCE_0215.md Round r45, research/IRON_KINGDOM_0215.md r45.
+- Status: built, map-tested and staged with the full offline workflow on 2026-10-20 (all steps passed); not yet play-tested. Start a new Iron Kingdom game for the stone mine. Startup marker: `...; economy telemetry r44; economy-only keep and Iron Kingdom stone r45`.
+
 ## Round r44: economy telemetry (2026-10-20, still 0.2.15)
 
 - User request: log what happens in the computer economies all the time so issues can be analysed later.

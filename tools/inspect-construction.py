@@ -129,7 +129,7 @@ def run():
     assert 'image+0xc5ad04' in source and '((Place)(image+0x182a40))(r.second,ex,ey)' in source and '((Index)(image+0x1bb560))(u)' in source and '(bits&~0x8000u)|0x2100u' in source and 'placeUnloaded(c.entity,riders,x,y,ex,ey);' in source
     assert source.index('int ex=x,ey=y;{int k=dt::unloadExit(p[0x4e]);')<source.index('((Unload)(image+0x16b990))(p);')<source.index('placeUnloaded(c.entity,riders,x,y,ex,ey);')
     # r43: the AI's people manager sets the carrier reserve through CEcoManager +0x138 (0x51C10: word eco+0x20 =
-    # clamp(v, 5, 999)) as clamp(min(7n + 10, carriers - 10), 5, 80); the plugin redirects that one call (0x2567B8) to
+    # clamp(v, 5, min(999, carriers eco+0x26))) as clamp(min(7n + 10, carriers - 10), 5, 80); the plugin redirects that one call (0x2567B8) to
     # reserveHook, which raises the value to carrierKeep(completed buildings) and calls the native setter. Pins: the call
     # site, the setter, the formula's clamp, the vtable slots and the building count table (completion increments
     # 0x10EF624 + (p*0x53 + type)*8).
@@ -139,7 +139,7 @@ def run():
     assert ('mov','eax, dword ptr [ecx + 8]') in rows(0x51a70,3) and ('imul','eax, eax, 0x53') in rows(0x136330,0x18) and ('inc',f'dword ptr [eax*8 + {hex(base+0x10ef624)}]') in rows(0x136330,0x18)
     assert pe.get_data(0xc2bc7c+0x138,4)==(base+0x51c10).to_bytes(4,'little') and pe.get_data(0xc2bc7c+0x80,4)==(base+0x51a70).to_bytes(4,'little')
     assert 'static int __fastcall reserveHook(BYTE*eco,void*,int value){' in source and 'static bool installReserveHook(){' in source and 'if(!installReserveHook()){fatal=true;' in source
-    assert 'set=dtoffence::carrierReserve(value,b);' in source and 'image+0x10ef624+(uintptr_t)p*0x298' in source and 'at[12]=0xe8;' in source and 'FlushInstructionCache(GetCurrentProcess(),at+12,6)' in source and 'CARRIER_RESERVE' in source and 'for(auto&r:reserveSeen)r=ReserveSeen{};' in source
+    assert 'set=dtoffence::carrierReserve(value,b,carriers,room);' in source and 'image+0x10ef624+(uintptr_t)p*0x298' in source and 'at[12]=0xe8;' in source and 'FlushInstructionCache(GetCurrentProcess(),at+12,6)' in source and 'CARRIER_RESERVE' in source and 'for(auto&r:reserveSeen)r=ReserveSeen{};' in source
     # r42: the Alt+9 reveal clears only the pending bits 3-5 of the fog bytes every tick (the merge then shows level 0);
     # base bits and counters stay (saves honest, off = natural re-fogging); keys polled on the tick, foreground + in game.
     assert 'if(fog[i]&0x38){fog[i]&=0xc7;n++;}' in aircraft_model and 'revealTick(t);if(t%5==0){aircraftJobs(t);darkSightTick(t);}' in source

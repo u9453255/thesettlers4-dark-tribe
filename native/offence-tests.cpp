@@ -1237,17 +1237,28 @@ static void toolsmithShovels(){
 // r43: the carrier reserve floor grows with the kingdom and only ever raises the AI's own value.
 static void carrierReserveFloor(){
  assert(carrierKeep(0)==15&&carrierKeep(19)==24&&carrierKeep(50)==40&&carrierKeep(100)==65&&carrierKeep(400)==120&&carrierKeep(-5)==15);
- assert(carrierReserve(5,50)==40&&carrierReserve(52,50)==52&&carrierReserve(5,0)==15&&carrierReserve(80,400)==120&&carrierReserve(0,0)==ReserveBase);
- for(int b=0;b<500;b++)assert(carrierKeep(b+1)>=carrierKeep(b)&&carrierKeep(b)>=ReserveBase&&carrierKeep(b)<=ReserveMax&&carrierReserve(b,b)>=b);
+ assert(carrierReserve(5,50,200,0)==40&&carrierReserve(52,50,200,0)==52&&carrierReserve(5,0,200,0)==15&&carrierReserve(80,400,500,0)==120&&carrierReserve(0,0,200,0)==ReserveBase);
+ /* r47: room for missing specialists, the reserve then at most carriers - room (the setter floors at 5) */
+ assert(specialistRoom(10,10,0)==0&&specialistRoom(0,5,0)==6&&specialistRoom(6,5,3)==3&&specialistRoom(0,0,20)==14&&specialistRoom(6,2,0)==3&&specialistRoom(-1,99,0)==7&&specialistRoom(6,5,-2)==0);
+ assert(carrierReserve(36,100,46,0)==65&&carrierReserve(70,100,46,0)==70&&carrierReserve(36,100,46,12)==34&&carrierReserve(36,100,200,12)==65&&carrierReserve(36,100,5,12)==0&&carrierReserve(70,100,46,3)==43);
+ for(int b=0;b<500;b++)assert(carrierKeep(b+1)>=carrierKeep(b)&&carrierKeep(b)>=ReserveBase&&carrierKeep(b)<=ReserveMax&&carrierReserve(b,b,1000,0)>=b&&carrierReserve(b,b,b,RoomMax)<=std::max(0,b-RoomMax));
+ /* r45: decorations and military buildings do not count; Iron Kingdom's end list (pid 3572) gives 38 economy buildings and keep 34, not 86 and 58 */
+ assert(economyBuilding(1)&&economyBuilding(24)&&economyBuilding(40)&&economyBuilding(42)&&economyBuilding(82)&&!economyBuilding(0)&&!economyBuilding(45)&&!economyBuilding(46)&&!economyBuilding(48)&&!economyBuilding(64)&&!economyBuilding(67)&&!economyBuilding(75)&&!economyBuilding(83));
+ {const int list[][2]={{1,1},{3,1},{5,2},{6,3},{8,1},{9,1},{10,2},{11,4},{12,2},{15,3},{16,2},{17,7},{19,1},{20,2},{21,1},{22,2},{24,1},{27,1},{42,1},{46,14},{47,6},{67,25},{68,1},{73,1},{75,1}};int all=0,eco=0;for(auto&e:list){all+=e[1];if(economyBuilding(e[0]))eco+=e[1];}assert(all==86&&eco==38&&carrierKeep(eco)==34&&carrierKeep(all)==58);}
 }
 // r44: the economy ledger row matches the header column by column and survives a short buffer.
 static void ledgerRows(){
- dtledger::Ledger l;l.player=3;l.eco=true;l.population=250;l.carriers=60;l.busy=12;l.reserve=45;l.keep=45;l.housing=300;l.settlers[1]=60;l.settlers[2]=5;l.settlers[3]=8;l.settlers[29]=20;l.settlers[44]=2;l.settlers[50]=4;l.settlers[61]=1;l.ready[40]=3;l.ready[41]=2;l.ready[24]=1;l.ready[21]=1;l.sites[41]=1;l.sites[22]=1;for(int g=0;g<dtledger::GoodCount;g++)l.goods[g]=g;
+ dtledger::Ledger l;l.player=3;l.eco=true;l.population=250;l.carriers=60;l.busy=12;l.reserve=45;l.keep=45;l.housing=300;l.settlers[1]=60;l.settlers[2]=5;l.settlers[3]=8;l.settlers[29]=20;l.settlers[44]=2;l.settlers[50]=4;l.settlers[61]=1;l.ready[40]=3;l.ready[41]=2;l.ready[24]=1;l.ready[21]=1;l.sites[41]=1;l.sites[22]=1;for(int g=0;g<dtledger::GoodCount;g++)l.goods[g]=g;l.tsout=7;l.tsin=3;l.tsworker=1;
  auto commas=[](const char*s){int n=0;for(;*s;s++)n+=*s==',';return n;};
- char row[2600];int w=dtledger::csvRow(l,123,45,500,row,sizeof(row));assert(w>0&&(size_t)w<sizeof(row)&&commas(dtledger::csvHeader())==52&&commas(row)==52);
- assert(!strcmp(row,"123,45,500,3,1,250,60,12,48,45,45,300,3,2,0,7,2,1,1,0,0,0,0,23,2,8,5,4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,1:60 2:5 3:8 29:20 44:2 50:4 61:1,21:1 24:1 40:3 41:2,22:1 41:1"));
- dtledger::Ledger z;w=dtledger::csvRow(z,1,2,3,row,sizeof(row));assert(w>0&&commas(row)==52&&!strcmp(row+w-3,",,,")&&dtledger::soldiers(z)==0);
- char tiny[16];w=dtledger::csvRow(l,123,45,500,tiny,sizeof(tiny));assert(w>=(int)sizeof(tiny)&&tiny[15]==0&&commas(tiny)<52);
+ char row[2600];int w=dtledger::csvRow(l,123,45,500,row,sizeof(row));assert(w>0&&(size_t)w<sizeof(row)&&commas(dtledger::csvHeader())==55&&commas(row)==55);
+ assert(!strcmp(row,"123,45,500,3,1,250,60,12,48,45,45,300,3,2,0,7,2,1,1,0,0,0,0,23,2,8,5,4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,7,3,1,1:60 2:5 3:8 29:20 44:2 50:4 61:1,21:1 24:1 40:3 41:2,22:1 41:1"));
+ dtledger::Ledger z;w=dtledger::csvRow(z,1,2,3,row,sizeof(row));assert(w>0&&commas(row)==55&&!strcmp(row+w-3,",,,")&&dtledger::soldiers(z)==0);
+ char tiny[16];w=dtledger::csvRow(l,123,45,500,tiny,sizeof(tiny));assert(w>=(int)sizeof(tiny)&&tiny[15]==0&&commas(tiny)<55);
  for(int t=0;t<dtledger::SettlerTypes;t++)l.settlers[t]=99999;char big[64];dtledger::list(big,sizeof(big),l.settlers,dtledger::SettlerTypes);assert(big[63]==0&&strlen(big)<64);
 }
-int main(){toolsmithShovels();basics();targetOrder();geometry();gating();styles();allied();campaign();reattack();fallback();defence();gardenerLosses();farmReturns();steering();sweeping();hunting();reclaiming();landFirst();marchBudget();losses();adoption();timeouts();detours();reviewFixes();fireRules();guarding();guardReview();keepAudit();soak();soakTwo();scaling();convoyRules();convoyField();convoySoak();defending();reclaimRegression();unreachable();reviewR33();defenceSoak();carrierReserveFloor();ledgerRows();puts("PASS: offence-tests");return 0;}
+// r46: surplus tool orders are cleared (never shovels, never continuous), and the output capacity marks a clog.
+static void toolWatch(){
+ assert(surplusOrder(25,1,4)&&surplusOrder(18,6,1)&&surplusOrder(4,2,99)&&!surplusOrder(31,6,4)&&!surplusOrder(25,0,4)&&!surplusOrder(25,1,0)&&!surplusOrder(25,1,100)&&!surplusOrder(25,1,-1));
+ assert(!clogged(0)&&!clogged(7)&&clogged(8)&&clogged(9)&&ToolWatchEvery<=50);
+}
+int main(){toolsmithShovels();basics();targetOrder();geometry();gating();styles();allied();campaign();reattack();fallback();defence();gardenerLosses();farmReturns();steering();sweeping();hunting();reclaiming();landFirst();marchBudget();losses();adoption();timeouts();detours();reviewFixes();fireRules();guarding();guardReview();keepAudit();soak();soakTwo();scaling();convoyRules();convoyField();convoySoak();defending();reclaimRegression();unreachable();reviewR33();defenceSoak();carrierReserveFloor();ledgerRows();toolWatch();puts("PASS: offence-tests");return 0;}

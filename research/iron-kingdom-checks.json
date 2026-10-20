@@ -34,10 +34,10 @@
       }
     ]
   },
-  "vikingBuildings": 83,
+  "vikingBuildings": 84,
   "vikingUnits": 161,
   "vikingGardeners": 8,
-  "vikingGoods": 27,
+  "vikingGoods": 29,
   "addedBarracks": {
     "x": 441,
     "y": 358,
@@ -50,6 +50,15 @@
       "cells": 112,
       "step": 9
     }
+  },
+  "stoneMine": {
+    "x": 448,
+    "y": 428,
+    "entrance": [
+      448,
+      429
+    ],
+    "stone": 240
   },
   "toolsmith": {
     "x": 523,
@@ -104,6 +113,18 @@
       "y": 349
     },
     {
+      "good": 32,
+      "amount": 8,
+      "x": 475,
+      "y": 349
+    },
+    {
+      "good": 32,
+      "amount": 8,
+      "x": 471,
+      "y": 353
+    },
+    {
       "good": 20,
       "amount": 8,
       "x": 529,
@@ -134,7 +155,7 @@
       "y": 471
     }
   ],
-  "rejectedSupplyMutations": 15,
+  "rejectedSupplyMutations": 20,
   "darkPlacementAnchors": {
     "49": 2930,
     "50": 247,

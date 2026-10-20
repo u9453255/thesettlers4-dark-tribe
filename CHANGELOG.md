@@ -6,6 +6,16 @@ The version stays **0.2.15** while updates come as numbered rounds. The mod's st
 
 ## 0.2.15 updates (October 2026)
 
+### r47: Computers can rebuild their workforce (*not yet play-tested*)
+- When a computer loses its builders, diggers or gardeners, its carrier reserve now makes room for new ones (and the barracks waits), so it no longer freezes with idle carriers and open building sites.
+
+### r46: Computer toolsmiths keep working (*not yet play-tested*)
+- A computer's toolsmith used to fill its output with pickaxes and hammers nobody needed and then stop forever, so no new shovels and no replacement gardeners came. Surplus tool orders are now cleared while a tool of that kind is already lying there.
+
+### r45: Computers count their real town, and Iron Kingdom gets stone (*not yet play-tested*)
+- The free-settler pool a computer keeps now depends on its real economy buildings, not on decorations and towers, so the Iron Kingdom Vikings no longer freeze with every carrier held back.
+- Iron Kingdom: the Vikings start with a stone mine on their stone mountain and 16 stone. Until now they had no stone at all after the first two huts and could never build another house or tower. Start a new Iron Kingdom game to get the new map.
+
 ### r44: Economy log for computer players (*developer feature*)
 - The computers' economies are recorded every few seconds to `evidence/v02-economy.csv`, so problems like the soldier drain can be found from a play session instead of guessed.
 

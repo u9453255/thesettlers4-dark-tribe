@@ -256,7 +256,8 @@ def run():
     bridge=(ROOT/'native/offence-native.hpp').read_text(encoding='utf-8')
     model=(ROOT/'native/offence-model.hpp').read_text(encoding='utf-8')
     # r43: the carrier reserve floor grows with the kingdom; the hook only ever raises the AI's own value.
-    assert 'constexpr int ReserveBase=15,ReservePer=2,ReserveMax=120;' in model and 'inline int carrierKeep(int buildings){return std::min(ReserveMax,ReserveBase+std::max(0,buildings)/ReservePer);}' in model and 'inline int carrierReserve(int native,int buildings){return std::max(native,carrierKeep(buildings));}' in model
+    assert 'inline bool economyBuilding(int type){return type>=1&&type<=82&&!(type>=45&&type<=48)&&!(type>=64&&type<=75);}' in model and 'if(c>0&&c<10000&&dtoffence::economyBuilding(t))n+=c;' in source  # r45
+    assert 'constexpr int ReserveBase=15,ReservePer=2,ReserveMax=120;' in model and 'inline int carrierKeep(int buildings){return std::min(ReserveMax,ReserveBase+std::max(0,buildings)/ReservePer);}' in model and 'inline int carrierReserve(int native,int buildings,int carriers,int room){int keep=carrierKeep(buildings);if(room>0)return std::min(keep,std::max(0,carriers-room));return std::max(native,keep);}' in model and 'constexpr int BuildersMin=6,DiggersMin=5,GardenerRoom=4,RoomMax=14;' in model
     # r44: economy telemetry: settler counts per type from the engine counters (0xF7D40 increments Statistics + 4 +
     # 4*(p*0x44A + type) and the total at +0x110), completed buildings from the table 0x10EF624 + (p*0x53 + type)*8,
     # sites from the per-player building lists, housing from 0xDF730(p) (types 40..42 of the table), goods from the
@@ -270,6 +271,32 @@ def run():
     _r=_rows(0xf7d40,0x2a);assert ('inc',f'dword ptr [eax*4 + {hex(_base+0xdabe34)}]') in _r and ('inc',f'dword ptr [ecx + {hex(_base+0xdabf40)}]') in _r and ('imul','eax, dword ptr [ebp + 8], 0x44a') in _r
     _r=_rows(0xdf730,0x64);assert ('mov',f'eax, dword ptr [edx + {hex(_base+0x10ef764)}]') in _r and ('imul','edx, edi, 0x298') in _r and ('ret','4') in _r
     _r=_rows(0x136330,0x18);assert ('inc',f'dword ptr [eax*8 + {hex(_base+0x10ef624)}]') in _r
+    # r46: the production gate (CProductionBuildingRole::sub_14CC20 state 3: worker byte +0x1D, entity flag 0x1000, then
+    # sub_14CDC0 (output piles +0x180..+0x184 hold fewer than 8 goods), sub_14D080 (every input pile +0x18C..+0x190 holds
+    # one) and the consumer sub_14CE20 (toolsmith branch 0x14D008: next ordered tool from +0x17D, counts eco+0x348)); CPile
+    # count is byte +0x41 (slot +0x28); buildingInfo pile type 0 = output, 1 = input (stonecutter: one STONE output).
+    _r=_rows(0x14cc7c,0x40);assert ('cmp','byte ptr [esi + 0x1d], al') in _r and ('test','dword ptr [edi + 0x14], 0x1000') in _r and ('call',hex(_base+0x14cdc0)) in _r and ('call',hex(_base+0x14d080)) in _r and ('call',hex(_base+0x14ce20)) in _r
+    _r=_rows(0x14cdc0,0x58);assert ('mov','eax, dword ptr [esi + 0x184]') in _r and ('sub','eax, dword ptr [esi + 0x180]') in _r and ('call','dword ptr [eax + 0x28]') in _r and ('cmp','ebx, 8') in _r
+    _r=_rows(0x14d080,0x50);assert ('mov','eax, dword ptr [edi + 0x190]') in _r and ('sub','eax, dword ptr [edi + 0x18c]') in _r and ('call','dword ptr [eax + 0x28]') in _r and ('test','eax, eax') in _r
+    _r=_rows(0x14d008,0x70);assert ('movzx','ecx, byte ptr [edi + 0x17d]') in _r and ('mov','eax, dword ptr [ebx + 0x348]') in _r and ('mov','byte ptr [edi + 0x17c], al') in _r and ('mov','byte ptr [edi + 0x17d], dl') in _r
+    assert ('movzx','eax, byte ptr [ecx + 0x41]') in _rows(0x1700e0,5) and pe.get_data(0xc5a7bc+0x28,4)==(_base+0x1700e0).to_bytes(4,'little')
+    _info=(executable.parent/'GameData/buildingInfo.xml').read_text(encoding='latin-1')
+    _piles=lambda key:re.findall(r'<good>(\w+)</good>\s*<type>(\d)</type>',re.search(r'<building id="BUILDING_%s"[^>]*>(.*?)</building>'%key,_info,re.S).group(1))
+    assert _piles('STONECUTTERHUT')==[('GOOD_STONE','0')] and sorted(_piles('TOOLSMITH'))==sorted([('GOOD_IRONBAR','1'),('GOOD_COAL','1'),('GOOD_AXE','0'),('GOOD_HAMMER','0'),('GOOD_ROD','0'),('GOOD_PICKAXE','0'),('GOOD_SAW','0'),('GOOD_SCYTHE','0'),('GOOD_SHOVEL','0')])
+    assert 'Toolsmith toolsmith(uint8_t p,uintptr_t eco)const{' in bridge and 'k.state=value<BYTE>(role+4);k.worker=value<BYTE>(role+0x1d);' in bridge and 'piles(role+0x180,k.out,8,k.outs,true);piles(role+0x18c,k.in,4,k.ins,false);' in bridge and 't.count=value<BYTE>(pile+0x41);' in bridge
+    assert 'int clearOrder(uintptr_t eco,int good){int before=orderOf(eco,good);if(before<=0||before>=100)return before;' in bridge
+    assert 'inline bool surplusOrder(int good,int lying,int order){return good!=31&&lying>=ToolSurplus&&order>0&&order<ShovelContinuous;}' in model and 'constexpr int OutputCapacity=8,ToolSurplus=1;' in model
+    # r47: specialists are converted by the per-tick processor sub_D57D0 (called from Logic::Update) and sub_D4C70 only
+    # while reserve < carriers - busy; the barracks (0x134D5A) adds the sector's +0x1E byte to its bar (CEcoManager slot
+    # +0x13C reads it, +0x140 stores argument - current clamped 0..99, and the people manager passes 12 before the reserve).
+    _r=_rows(0xd58a0,0x12);assert ('movzx','eax, word ptr [ebx + 0x22]') in _r and ('movzx','ecx, word ptr [ebx + 0x26]') in _r and ('sub','ecx, eax') in _r and ('movzx','eax, word ptr [ebx + 0x20]') in _r and ('cmp','eax, ecx') in _r
+    _r=_rows(0xd4d4f,0x12);assert ('movzx','eax, word ptr [edi + 0x22]') in _r and ('movzx','ecx, word ptr [edi + 0x26]') in _r and ('movzx','eax, word ptr [edi + 0x20]') in _r and ('cmp','eax, ecx') in _r
+    assert ('call',hex(_base+0xd57d0)) in _rows(0xf2810,0xb) and ('movzx','eax, byte ptr [ebx + 0x1e]') in _rows(0x134d5a,0x22)
+    assert ('movzx','eax, byte ptr [eax + 0x1e]') in _rows(0x51c70,0xf) and ('sub','ecx, eax') in _rows(0x51c80,0x30) and ('mov','byte ptr [edx + 0x1e], cl') in _rows(0x51c80,0x30) and ('mov','eax, 0x63') in _rows(0x51c80,0x30)
+    assert pe.get_data(0xc2bc7c+0x13c,4)==(_base+0x51c70).to_bytes(4,'little') and pe.get_data(0xc2bc7c+0x140,4)==(_base+0x51c80).to_bytes(4,'little') and ('push','0xc') in _rows(0x256799,0x13) and ('call','dword ptr [eax + 0x140]') in _rows(0x256799,0x13)
+    assert 'int room=dtoffence::specialistRoom(builders,diggers,gardenerShort[p]);set=dtoffence::carrierReserve(value,b,carriers,room);' in source and 'if(room>0){int hold=((GetHold)(image+0x51c70))(eco);if(hold<room)((SetHold)(image+0x51c80))(eco,room+hold);}' in source
+    assert 'gardenerShort[p]=std::max(0,wanted-supply.alive-supply.pending);' in source and 'image+0x106c8a4+4*idx' in source and 'room=%d builders=%d diggers=%d' in source
+    assert 'static void offenceToolWatch(uint8_t p,uint32_t t){' in source and 'OFFENCE_TOOL_SURPLUS' in source and 'OFFENCE_TOOLSMITH' in source and '{offenceShovelGuard(p,t);offenceToolWatch(p,t);}' in source and 'l.tsout=k.outSum;l.tsin=k.inMin;l.tsworker=k.worker;' in bridge
     for forbidden in ['lua','AcquireSRWLock','SendWarriors','api->','MagicIncreaseMana','SettlersAdd','0xe3a80']:assert forbidden not in bridge,forbidden
     # Destruction is the gardeners' greening; the plugin's own destroy is only the all-green fallback.
     assert 'if(!dark){' in model and 'ops.destroy(c,c.target)' in model and 'GardenerType' in bridge and 'image+0xd5100' in bridge
@@ -317,7 +344,7 @@ def run():
     assert 'read(eco+0x354,list)' in bridge and 'read(eco+0x348,counts)' in bridge and 'listEnd-list>64' in bridge and 'i<countsEnd-counts' in bridge
     assert 'inline int shovelOrder(' in model and 'ordered>=ShovelContinuous?"continuous order"' in model and 'toolsmiths<=0?"no toolsmith"' in model and 'free>ShovelReserve?"spare shovels"' in model
     assert 'offenceTools(p,t,supply,wanted);' in source and 'nativeOffence.orderShovels(tools,supply.eco,amount)' in source and 'OFFENCE_TOOLS player=%u' in source and 'toolsmiths=%d shovelOrder=%d ironbars=%d coal=%d' in source
-    assert '; toolsmith shovel orders r29; citadel fire keep-off and farm blockade r30; clean start maps r31; scaled styles and protected convoy r32; computer defence and reclaim priority r33; site selection crash fix r34; reclaimed land fog and fast army marches r35; fire pull and route diagnostics r36; relentless and smart attacks r37; walked progress and steady sieges r38; Dark Gardeners leave the Manacopter r39; Iron Kingdom toolsmith hammers r40; no Manacopter healing r41; map reveal toggle r42; scaling carrier reserve r43; economy telemetry r44")' in source
+    assert '; toolsmith shovel orders r29; citadel fire keep-off and farm blockade r30; clean start maps r31; scaled styles and protected convoy r32; computer defence and reclaim priority r33; site selection crash fix r34; reclaimed land fog and fast army marches r35; fire pull and route diagnostics r36; relentless and smart attacks r37; walked progress and steady sieges r38; Dark Gardeners leave the Manacopter r39; Iron Kingdom toolsmith hammers r40; no Manacopter healing r41; map reveal toggle r42; scaling carrier reserve r43; economy telemetry r44; economy-only keep and Iron Kingdom stone r45; toolsmith output watch r46; specialist room r47")' in source
     # r30: one fire geometry (citadel-fire.hpp) for the director and the farm blockade; the fire is on from the native
     # ready-farm counter, the listed farms or a Farm site; every keep is Euclidean; the guard runs every director step.
     fire=(ROOT/'native/citadel-fire.hpp').read_text(encoding='utf-8')
@@ -338,8 +365,8 @@ def run():
     assert 'offenceFireNote[0]=0;' in source and 'random' not in fire
     # r29 review: the AI's clears are watched every tick; the watch is transient and puts back only the plugin's part.
     assert 'struct ShovelWatch {int owed=0,seen=-1;};' in model and 'if(now+1<w.seen)add=std::max(0,std::min(w.owed,w.seen)-now);' in model and 'inline void shovelNoted(' in model and 'inline int shovelTarget(' in model
-    assert 'for(uint8_t p=2;p<=8;p++)offenceShovelGuard(p,t);' in source and 'static void offenceShovelGuard(uint8_t p,uint32_t t){' in source and 'nativeOffence.economyLive(p,eco)' in source and 'dtoffence::shovelNoted(watch,' in source
-    assert source.index('for(uint8_t p=2;p<=8;p++)offenceShovelGuard(p,t);')<source.index('if(t%dtoffence::Period)return;OffenceOps ops;')
+    assert 'for(uint8_t p=2;p<=8;p++){offenceShovelGuard(p,t);offenceToolWatch(p,t);}' in source and 'static void offenceShovelGuard(uint8_t p,uint32_t t){' in source and 'nativeOffence.economyLive(p,eco)' in source and 'dtoffence::shovelNoted(watch,' in source
+    assert source.index('for(uint8_t p=2;p<=8;p++){offenceShovelGuard(p,t);offenceToolWatch(p,t);}')<source.index('if(t%dtoffence::Period)return;OffenceOps ops;')
     assert 'offenceShovelWatch' not in (ROOT/'native/economy.hpp').read_text() and 'for(auto&w:offenceShovelWatch)w=dtoffence::ShovelWatch{};' in source
     assert 'back==eco&&read(eco+0x12,owner)&&owner==p' in bridge
     # r32: every style grows with the army (today's sizes the floor), gardeners with the soldiers a style takes, at most

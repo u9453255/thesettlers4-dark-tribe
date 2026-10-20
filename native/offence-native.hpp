@@ -466,6 +466,40 @@ public:
    id=next;}}
   k.ordered=shovelOrdered(eco);return k;
  }
+ // r46: the first ready toolsmith of `eco` with the fields of the production gate (CProductionBuildingRole::sub_14CC20:
+ // role state +4 == 3, worker byte +0x1D, entity flag 0x1000; sub_14CDC0: the output piles (+0x180..+0x184, buildingInfo
+ // pile type 0, one per tool) hold fewer than 8 goods in total; sub_14D080: every input pile (+0x18C..+0x190, type 1)
+ // holds a good; sub_14CE20/0x14D008: the next ordered tool from the last index +0x17D into +0x17C). Piles: good +0x40,
+ // count +0x41 (CPile slot +0x28), reserved +0x42, entity flag 0x10 while production runs. Orders: the eco's tool list
+ // eco+0x354 with the counts eco+0x348.
+ struct ToolPile {int good=0,count=0,reserved=0;bool busy=false;};
+ struct Toolsmith {bool found=false;uint16_t id=0;int state=-1,worker=-1,product=-1,last=-1,outSum=0,inMin=-1,outs=0,ins=0,tools=0;uint32_t flags=0;ToolPile out[8],in[4];int goods[16]={},orders[16]={};};
+ Toolsmith toolsmith(uint8_t p,uintptr_t eco)const{
+  Toolsmith k;if(p<2||p>8||!eco)return k;uint32_t head=0;if(!read(image+0x10eea74+(p*0x53+21)*4,head))return k;uint16_t id=(uint16_t)head;
+  for(int guard=0;id&&guard<512;guard++){uintptr_t e=entity(id);if(!e)break;uint16_t next=value<uint16_t>(e+0x2a);uint32_t bits=value<uint32_t>(e+0x14);uintptr_t role=value<uintptr_t>(e+0x50);
+   if(value<BYTE>(e+10)==8&&value<uint16_t>(e+12)==21&&(value<BYTE>(e+32)>>4)==p&&(bits&0x2000000)&&!(bits&0x4000000)&&role&&value<uintptr_t>(role)==image+0xc59094&&buildingEconomy(e)==eco&&readable(role,0x1a0)){
+    k.found=true;k.id=id;k.flags=bits;k.state=value<BYTE>(role+4);k.worker=value<BYTE>(role+0x1d);k.product=value<BYTE>(role+0x17c);k.last=value<BYTE>(role+0x17d);
+    auto piles=[&](uintptr_t at,ToolPile*list,int max,int&n,bool output){uintptr_t b=value<uintptr_t>(at),e2=value<uintptr_t>(at+4);if(!b||e2<b||e2-b>2*(uintptr_t)max||!readable(b,e2-b))return;
+     for(uintptr_t q=b;q+2<=e2;q+=2){uintptr_t pile=entity(value<uint16_t>(q));if(!pile)continue;ToolPile&t=list[n++];t.good=value<BYTE>(pile+0x40);t.count=value<BYTE>(pile+0x41);t.reserved=value<BYTE>(pile+0x42);t.busy=(value<uint32_t>(pile+0x14)&0x10)!=0;
+      if(output)k.outSum+=t.count;else k.inMin=k.inMin<0?t.count:std::min(k.inMin,t.count);}};
+    piles(role+0x180,k.out,8,k.outs,true);piles(role+0x18c,k.in,4,k.ins,false);
+    uintptr_t list=0,listEnd=0,counts=0,countsEnd=0;
+    if(read(eco+0x354,list)&&read(eco+0x358,listEnd)&&read(eco+0x348,counts)&&read(eco+0x34c,countsEnd)&&list&&listEnd>=list&&listEnd-list<=16&&counts&&countsEnd>=counts&&countsEnd-counts>=listEnd-list&&readable(list,listEnd-list)&&readable(counts,listEnd-list))
+     for(uintptr_t i=0;i<listEnd-list;i++){k.goods[k.tools]=*(BYTE*)(list+i);k.orders[k.tools]=*(BYTE*)(counts+i);k.tools++;}
+    return k;}
+   id=next;}
+  return k;
+ }
+ // r46: the eco's order count for any tool good (as shovelOrdered for 31), -1 without a slot.
+ int orderOf(uintptr_t eco,int good)const{
+  uintptr_t list=0,listEnd=0,counts=0,countsEnd=0;if(!eco||!read(eco+0x354,list)||!read(eco+0x358,listEnd)||!read(eco+0x348,counts)||!read(eco+0x34c,countsEnd))return -1;
+  if(!list||listEnd<list||listEnd-list>64||!counts||countsEnd<counts||countsEnd-counts>64||!readable(list,listEnd-list)||!readable(counts,countsEnd-counts))return -1;
+  for(uintptr_t i=0;i<listEnd-list;i++)if(*(BYTE*)(list+i)==good)return i<countsEnd-counts?*(BYTE*)(counts+i):-1;
+  return -1;
+ }
+ // r46: clear one tool's order through the menu handler (0xD6A90 amount 0) unless it is 0 already or continuous (100);
+ // returns the order before the call.
+ int clearOrder(uintptr_t eco,int good){int before=orderOf(eco,good);if(before<=0||before>=100)return before;((void(__thiscall*)(void*,int,int))(image+0xd6a90))((void*)eco,good,0);dtmem::invalidate();return before;}
  // The eco's order count for SHOVEL (31): the tool list is the byte vector eco+0x354..+0x358, the
  // order counts the parallel byte vector eco+0x348..+0x34C (0xD6A90, consumer 0x14D008, save 0xD3F02).
  // -1 when the economy has no shovel slot.
@@ -517,6 +551,7 @@ public:
   uintptr_t eco=x>=0&&y>=0?economy(p,x,y):0;if(!eco)return l;l.eco=true;
   for(int g=0;g<dtledger::GoodCount;g++)l.goods[g]=((int(__thiscall*)(void*,int))(image+0xd4280))((void*)eco,dtledger::Goods[g]);
   l.carriers=value<uint16_t>(eco+0x26);l.busy=value<uint16_t>(eco+0x22);l.reserve=value<uint16_t>(eco+0x20);dtmem::invalidate();
+  Toolsmith k=toolsmith(p,eco);if(k.found){l.tsout=k.outSum;l.tsin=k.inMin;l.tsworker=k.worker;} /* r46 */
   return l;
  }
  // r33: free stock of one good in an economy (0xD4280, as census() reads it), -1 without an economy.

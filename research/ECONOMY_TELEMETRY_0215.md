@@ -21,6 +21,7 @@ Columns (`native/economy-telemetry.hpp`, `csvHeader`/`csvRow`; the `ledgerRows` 
 | `sites` | entities of the per-player building lists [0x10EEA74 + (p*0x53 + type)*4] (next id +0x2A) that lack the ready flag 0x2000000, summed |
 | `soldiers,leaders,builders,diggers,gardeners` | settler counts per type from Statistics + 4 + 4*type: 29..44 and 61..63, 44, 3, 2, 50 |
 | 22 goods `log..water` | free stock of the home economy, 0xD4280(eco, good) for the S4ModApi ids in `dtledger::Goods` (LOG 22, BOARD 7, STONE 32, IRONORE 21, COAL 10, IRONBAR 20, SWORD 34, BOW 8, BATTLEAXE 5, BLOWGUN 6, BACKPACKCATAPULT 38, SHOVEL 31, HAMMER 18, AXE 4, PICKAXE 25, SAW 28, BREAD 9, FISH 11, MEAT 24, GRAIN 16, FLOUR 12, WATER 36) |
+| `tsout,tsin,tsworker` | r46: the home economy's first ready toolsmith: output piles total (capacity 8), lowest input pile count, worker byte; -1 without one |
 | `settlers,ready,sites_by_type` | `type:count` pairs separated by spaces for every type with a count above 0 (settlers 0..66, completed buildings 0..82, sites 0..82) |
 
 Cost: per row about 83 short list walks (guard 512 each), 22 stock calls and a few hundred reads, once per 500 ticks per computer; the OFFENCE_SUPPLY census does more every 3,000 ticks. The file grows by about 1 KB per computer per 500 ticks (roughly 1 MB per hour of play at normal speed).
@@ -29,11 +30,16 @@ Cost: per row about 83 short list walks (guard 512 each), 22 stock calls and a f
 
 `python tools/economy-report.py [csv] [--pid N] [--player P] [--last]` groups the rows by process and map, prints per computer the population, carriers (min/median/last, idle), reserve and keep, soldiers, buildings and sites, the end stock, the buildings and settlers by name, and flags:
 
-- carriers drained (idle < 5 for three samples or more), reserve below keep, soldiers appearing while carriers were below keep (the r43 floor not holding);
+- carriers drained (idle < 5 for three samples or more), reserve below keep, soldiers appearing while carriers were below keep (the r43 floor not holding), no carrier above the keep;
+- r46: toolsmith output full (8 or more tools lying there), toolsmith without a worker, toolsmith inputs empty while iron and coal are in stock;
 - construction stalled (sites open, no completion for 20,000 ticks), sites without a builder, smithies without a smith (hammers), weapon chain and toolsmith starved of iron bars and coal;
 - population flat over the last 30,000 ticks with no residence site, soldiers above 60% of the population, goods at 0 in 80% of the samples.
 
 The flags are heuristics; the runtime log (same ms and pid) holds the offence and recruitment lines that explain them.
+
+## First field reading (pid 3572, Iron Kingdom, r44)
+
+140 rows, one computer. The report showed in one screen what three rounds of log reading had not: carriers pinned at the reserve (57 = keep) for 55,000 ticks, population falling 319 -> 182 with never a residence site, stone at 0 from tick 30,000 and no stonecutter or stone mine in the building list. Consequences and fixes: `AI_OFFENCE_0215.md` Round r45. The first "reserve below keep" flag was wrong (the native setter caps the reserve at the carrier total); the tool now flags that case as "no carrier above the keep".
 
 ## Limits
 

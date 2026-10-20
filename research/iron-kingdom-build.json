@@ -4,7 +4,7 @@
   "source": "C:\\Projects\\thesettlers4\\Map\\Campaign\\AO_trojan10.map",
   "source_sha256": "05f34cbb22aad2e8e390cf9f3d38dcd13e3513d69ccfa6f54c67450fc0b7b122",
   "output": "C:\\Projects\\thesettlers4-dark-tribe\\work\\generated\\Map\\User\\DarkTribe_IronKingdom.map",
-  "output_sha256": "b129169010f010bb4fe226b4a2d0927b10fc406e756c46d4bada453ce60e8ba9",
+  "output_sha256": "aa0846879fd80dbb7a06e51a1e8e4e5b632301f849bc9e0f41867f514e9ee654",
   "changedChunks": [
     2,
     1,
@@ -31,7 +31,7 @@
   "darkUnits": 156,
   "darkBuildings": 12,
   "vikingUnits": 161,
-  "vikingBuildings": 83,
+  "vikingBuildings": 84,
   "garrisonedTowers": 17,
   "fieldArmy": 24,
   "gardeners": 8,
@@ -70,7 +70,7 @@
     ]
   ],
   "relocatedVikingUnits": 1,
-  "vikingGoods": 27,
+  "vikingGoods": 29,
   "sourceVikingGoods": 16,
   "removedTrojanGoods": 24,
   "barracks": {
@@ -136,6 +136,31 @@
       "amount": 8,
       "x": 473,
       "y": 349
+    }
+  ],
+  "stoneMine": {
+    "type": 14,
+    "x": 448,
+    "y": 428,
+    "entrance": [
+      448,
+      429
+    ],
+    "ring": 0,
+    "stone": 240
+  },
+  "stonePiles": [
+    {
+      "good": 32,
+      "amount": 8,
+      "x": 475,
+      "y": 349
+    },
+    {
+      "good": 32,
+      "amount": 8,
+      "x": 471,
+      "y": 353
     }
   ],
   "toolsmith": {

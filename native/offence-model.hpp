@@ -186,9 +186,24 @@ inline int gardenersFor(Style s,int soldiers=0){return std::min(MaxGardeners,gar
 // every draft down to 5 idle carriers; the plugin's hook raises each such write to at least carrierKeep(buildings), so
 // the barracks (draft only while carriers > busy + reserve) leaves a pool that grows with the kingdom and new soldiers
 // come only from new residences. The native value is only ever raised.
-constexpr int ReserveBase=15,ReservePer=2,ReserveMax=120; /* r43: 15 idle carriers plus one per ReservePer completed buildings, at most ReserveMax */
+// r45: only economy buildings count (field pid 3572: 86 "buildings" were 28 eye-catcher decorations, 20 towers and a
+// castle, so the keep took the whole carrier pool and the computer froze). Military buildings 45..48 (lookout,
+// towers, castle) and eye-catchers 64..75 need no carriers; residences and every production building do.
+inline bool economyBuilding(int type){return type>=1&&type<=82&&!(type>=45&&type<=48)&&!(type>=64&&type<=75);}
+constexpr int ReserveBase=15,ReservePer=2,ReserveMax=120; /* r43: 15 idle carriers plus one per ReservePer completed economy buildings, at most ReserveMax */
 inline int carrierKeep(int buildings){return std::min(ReserveMax,ReserveBase+std::max(0,buildings)/ReservePer);}
-inline int carrierReserve(int native,int buildings){return std::max(native,carrierKeep(buildings));}
+// r47: specialists (builders 3, diggers 2, the plugin's gardeners 50) are made from idle carriers by the per-tick
+// processor sub_D57D0 (Logic::Update) only while reserve < carriers - busy, the same bar as the barracks (field pid 18132
+// game 2: every builder died at tick 44,000, carriers fell to the keep and nothing could be recruited for 66,000 ticks;
+// the AI's own formula would have kept 10 free). While essential workers are missing the reserve leaves `room` for them
+// (missing builders below BuildersMin, diggers below DiggersMin, up to GardenerRoom missing gardeners, at most RoomMax),
+// and the hook withholds the same room from the barracks through the economy's +0x1E byte (added to the barracks' bar
+// at 0x134D68 but not to the specialists'), so the specialists get those carriers first and nothing drains.
+constexpr int BuildersMin=6,DiggersMin=5,GardenerRoom=4,RoomMax=14;
+inline int specialistRoom(int builders,int diggers,int gardenersMissing){return std::min(RoomMax,std::max(0,BuildersMin-builders)+std::max(0,DiggersMin-diggers)+std::clamp(gardenersMissing,0,GardenerRoom));}
+// The reserve the hook stores: the AI's value raised to the keep; with room, at most carriers - room so that `room`
+// carriers stay recruitable (the barracks is held off by the +0x1E byte meanwhile).
+inline int carrierReserve(int native,int buildings,int carriers,int room){int keep=carrierKeep(buildings);if(room>0)return std::min(keep,std::max(0,carriers-room));return std::max(native,keep);}
 enum class Event:uint8_t {Decline,Launch,Stage,Assault,Siege,Destroyed,Deferred,Retarget,Return,Dissolved,Lost,Adopted,Ignored,Avoid,Collapsed,Greening,Gardeners,Reclaim,Front,Hunt,Join,Call,Fire,Convoy,Defend};
 // Deterministic generator owned by the plugin; the game's LCG (RVA 0xE66B10)
 // drives every native AI decision and must never be consumed.
@@ -1520,6 +1535,14 @@ inline int recruitOrder(int alive,int pending,int coming,int shovels,bool carrie
 // the economy has no shovel slot. Returns the amount to add (0: none, the
 // reason in why).
 constexpr int ShovelBatch=4,ShovelContinuous=100;
+// r46: a toolsmith's output piles (one per tool) share a capacity of OutputCapacity goods (CProductionBuildingRole
+// sub_14CDC0: it makes nothing while they hold 8 or more), and a tool nobody takes stays there (field pid 2476: six
+// pickaxes and a hammer the AI had ordered sat in the output for 120,000 ticks; two tools were made in that time, no
+// shovel, and the gardeners died out). An order for a tool that already lies in an output pile is surplus and is
+// cleared by the plugin's tool watch; never the shovel order, never a continuous order (100).
+constexpr int OutputCapacity=8,ToolSurplus=1;constexpr uint32_t ToolWatchEvery=10;
+inline bool surplusOrder(int good,int lying,int order){return good!=31&&lying>=ToolSurplus&&order>0&&order<ShovelContinuous;}
+inline bool clogged(int outSum){return outSum>=OutputCapacity;}
 // The order byte the plugin wants while shovels are short: the shovels still needed, at most a batch.
 inline int shovelTarget(int alive,int pending,int shovels,int wanted=GardenersWanted){
  int missing=wanted-alive-std::max(0,pending),free=std::max(0,shovels);

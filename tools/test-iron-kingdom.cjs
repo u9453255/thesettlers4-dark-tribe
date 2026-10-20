@@ -5,13 +5,13 @@ const {readMap}=require('./map-format.cjs');
 const {gameDir,python}=require('./project-paths.cjs');
 const {CLEARED_FLAGS}=require('./scenario-terrain.cjs');
 const {farmsInFire,assertNoFarmInFire,assertFarmCleared,checkNative,buildingRows,FarmLock,FARM,BAKED_FLAGS}=require('./citadel-fire.cjs');
-const {GOOD,TOOLSMITH,BARRACKS,TOOL_INPUTS,TOOL_HAMMERS,TOOL_TOTALS,TOOL_GOODS,steps,reachable,footprintCells,pileByte7,authoredGround,checkPiles,checkSite,checkLevel,checkLandscape}=require('./scenario-supply.cjs');
+const {GOOD,TOOLSMITH,BARRACKS,TOOL_INPUTS,TOOL_HAMMERS,TOOL_TOTALS,TOOL_GOODS,steps,reachable,footprintCells,pileByte7,authoredGround,checkPiles,checkSite,checkLevel,checkLandscape,checkMine,STONE_MINE,RESOURCE_STONEMINE}=require('./scenario-supply.cjs');
 // r40: the toolsmith also gets one pile of TOOL_HAMMERS hammers (a lost smith can be replaced).
 const TOOL_PILES=[...TOOL_INPUTS,GOOD.HAMMER];
 const root=path.resolve(__dirname,'..'),N=576;
 const DARK_START=[378,134],VIKING_START=[475,353];
 // Start supplies of the Viking kingdom (build-iron-kingdom.cjs): weapon and shovel piles at the start.
-const SUPPLY=[GOOD.SWORD,GOOD.SWORD,GOOD.BOW,GOOD.BATTLEAXE,GOOD.SHOVEL,GOOD.SHOVEL];
+const SUPPLY=[GOOD.SWORD,GOOD.SWORD,GOOD.BOW,GOOD.BATTLEAXE,GOOD.SHOVEL,GOOD.SHOVEL,GOOD.STONE,GOOD.STONE]; /* r45: stone piles */
 // Toolsmith start buffer (r29): IRONBAR x16 and COAL x16 in piles of 8 beside the source toolsmith's entrance; r40: HAMMER x2.
 const map=readMap(path.join(root,'work/generated/Map/User/DarkTribe_IronKingdom.map'));
 const source=readMap(path.join(gameDir(),'Map/Campaign/AO_trojan10.map'));
@@ -60,7 +60,7 @@ for(const f of removedFarms)assertFarmCleared({N,objects:get(map,6),farm:[f.x,f.
   for(const f of removedFarms)assert.throws(()=>assertNoFarmInFire(farmAt(f.x,f.y)),/fire field/);
   assertNoFarmInFire(farmAt(temple.x+1+FarmLock,temple.y+2));
 }
-assert(count(units,1)===156&&count(buildings,2)===83,'Dark units and Viking kingdom with its added barracks');
+assert(count(units,1)===156&&count(buildings,2)===84,'Dark units and Viking kingdom with its added barracks and stone mine');
 // Garrisons: every Viking tower manned (bytes 7..15 count soldier types 29..37).
 for(const b of buildings)if(b[5]===2&&[46,47].includes(b[4]))
   assert(b[6]===1&&b[7]===(b[4]===46?2:3)&&b[10]===(b[4]===46?1:3),'Viking tower garrison');
@@ -81,10 +81,10 @@ const maskOf=(t,o)=>o===2?masks._viking[t]:masks[t],blockOf=(t,o)=>masks._raceBl
 const ground=authoredGround(N,get(source,13),Buffer.concat(sourceMapped),maskOf,blockOf); // the builder levels against every authored building, removed farms included
 assert(ground.mode==='footprint'&&ground.step===12&&ground.buildings===84,'Authored ground: level footprints, steps up to 12');
 const levelOf=(t,o)=>ground.levelOf(maskOf(t,o),blockOf(t,o)),barracksLevel=levelOf(BARRACKS,2);
-const levelled=footprintCells(N,Buffer.concat(addedBuildings),levelOf,0);
+const levelled=footprintCells(N,Buffer.concat(addedBuildings.filter(b=>b[4]===BARRACKS)),levelOf,0); /* r45: the mine is not levelled */
 const landscape=checkLandscape(N,get(map,13),get(source,13),levelled);
 assert(landscape.heights>0&&landscape.shading>0,'Barracks ground levelled and shaded');
-const prepared=footprintCells(N,Buffer.concat(addedBuildings),(t,o)=>masks._viking[t],1);
+const prepared=footprintCells(N,Buffer.concat(addedBuildings.filter(b=>b[4]===BARRACKS)),(t,o)=>masks._viking[t],1); /* r45: the mine site is untouched */
 for(let at=0;at<objects.length;at+=4) {
   const was=sourceObjects[at+1];
   assert(objects[at+1]===(was===1?0:was),'Initial owner remap');
@@ -121,11 +121,16 @@ assert(sourceVikingGoods.length===16&&goods.slice(0,16).every((g,i)=>g.equals(so
 // and unit. Mutations below must fail here.
 function verifySupply(m) {
   const all=rows(m,8,20),added=all.slice(sourceBuildingCount);
-  assert(added.length===1&&added[0][4]===BARRACKS&&added[0][5]===2,'One added Viking barracks');
+  assert(added.length===2&&added[0][4]===BARRACKS&&added[0][5]===2&&added[1][4]===STONE_MINE&&added[1][5]===2,'One added Viking barracks and one stone mine');
   assert(all.filter(b=>b[5]===2&&b[4]===BARRACKS).length===1,'Viking barracks');
   const site=checkSite({N,land:get(m,13),objects:get(m,6),record:added[0],mask:masks._viking[BARRACKS],door:masks._vikingDoors[BARRACKS],
-    others:Buffer.concat(all.slice(0,sourceBuildingCount)),maskOf,units:get(m,7),goods:get(m,9),start:VIKING_START});
+    others:Buffer.concat([...all.slice(0,sourceBuildingCount),added[1]]),maskOf,units:get(m,7),goods:get(m,9),start:VIKING_START});
   site.ground=checkLevel({N,land:get(m,13),sourceLand:get(source,13),record:added[0],level:barracksLevel,maxStep:ground.step});
+  // r45: the stone mine on the stone mountain (whole footprint on owned mountain 32, core on STONEMINE resource, entrance
+  // reachable, ground untouched), the only one of the kingdom.
+  const mine=checkMine({N,land:get(m,13),objects:get(m,6),sourceLand:get(source,13),record:added[1],mask:masks._viking[STONE_MINE],block:masks._raceBlocks[1][STONE_MINE],door:masks._vikingDoors[STONE_MINE],
+    others:Buffer.concat([...all.slice(0,sourceBuildingCount),added[0]]),maskOf,units:get(m,7),goods:get(m,9),start:VIKING_START,low:RESOURCE_STONEMINE[0],high:RESOURCE_STONEMINE[1]});
+  assert(all.filter(b=>b[5]===2&&b[4]===STONE_MINE).length===1&&mine.stone>=16*8,'One Viking stone mine on rich stone');
   const piles=checkPiles({N,land:get(m,13),objects:get(m,6),goods:get(m,9),from:16,byte7:pileByte7(get(source,9)),buildings:get(m,8),maskOf,
     units:get(m,7),starts:{2:VIKING_START},expected:{2:[...SUPPLY,...TOOL_PILES]},totals:{2:{...TOOL_TOTALS,[GOOD.HAMMER]:TOOL_HAMMERS}}})[2];
   // The kingdom's one toolsmith is the source record (unchanged above), its entrance owned and reachable; the iron bar
@@ -137,7 +142,7 @@ function verifySupply(m) {
   assert(get(m,6)[4*door+1]===2&&reachable(N,get(m,13),get(m,6),2,VIKING_START)[door],'Toolsmith entrance not owned or unreachable');
   for(const p of piles)if(TOOL_GOODS.has(p.good))assert(steps(...toolsmith.entrance,p.x,p.y)<=16,'Toolsmith input away from its entrance');
   assert(piles.filter(p=>p.good===GOOD.HAMMER).length===1,'One hammer pile'); /* r40 */
-  return {barracks:site,toolsmith,piles};
+  return {barracks:site,mine,toolsmith,piles};
 }
 const supply=verifySupply(map);
 let rejected=0;
@@ -148,7 +153,12 @@ function mutated(type,mutate,expected) {
   rejected++;
 }
 const goodsData=get(map,9),addedPile=good=>{for(let i=8*16;i<goodsData.length;i+=8)if(goodsData[i+4]===good)return i;};
-mutated(8,d=>{d[d.length-20+4]=1;});                                                         // barracks missing
+mutated(8,d=>{d[d.length-40+4]=1;});                                                         // barracks missing
+mutated(8,d=>{d[d.length-20+4]=1;});                                                         // stone mine missing (r45)
+mutated(8,d=>{d.writeUInt16LE(VIKING_START[0],d.length-20);d.writeUInt16LE(VIKING_START[1],d.length-18);},/mountain/); // stone mine on grass (the start)
+mutated(6,d=>{d[4*(supply.mine.y*N+supply.mine.x)+3]=0;},/resource/);                        // stone mine core off the stone
+mutated(13,d=>{d[4*(supply.mine.y*N+supply.mine.x)]+=1;},/Mine ground/);                     // stone mine ground levelled
+mutated(9,d=>{d[addedPile(GOOD.STONE)+4]=GOOD.SWORD;});                                       // stone piles replaced
 mutated(9,d=>{const i=addedPile(GOOD.SWORD);d.writeUInt16LE(DARK_START[0],i);d.writeUInt16LE(DARK_START[1],i+2);}); // pile on the Dark start
 mutated(13,d=>{const i=addedPile(GOOD.SWORD);d[4*(goodsData.readUInt16LE(i+2)*N+goodsData.readUInt16LE(i))+2]|=64;}); // land under a pile turned Dark
 mutated(9,d=>{const i=addedPile(GOOD.BOW);d.writeUInt16LE(supply.barracks.x,i);d.writeUInt16LE(supply.barracks.y,i+2);}); // pile on the barracks
@@ -185,8 +195,8 @@ for(const t of [11,14])assert(get(map,t).toString('latin1').startsWith('DARK TRI
 // Every other chunk byte-identical to the source.
 for(const c of map.chunks)if(![1,2,3,6,7,8,9,11,12,13,14,15,16].includes(c.type))assert(c.packed.equals(source.chunks.find(o=>o.type===c.type).packed),'Unexpected chunk change '+c.type);
 fs.writeFileSync(path.join(root,'research/iron-kingdom-checks.json'),JSON.stringify({version:'0.2.15',game_started:false,live_process_read:false,
-  players:2,darkBuildings:count(buildings,1),darkUnits:156,fireCleanStart:{farmLock:FarmLock,removedFarms},vikingBuildings:83,vikingUnits:count(units,2),vikingGardeners:gardeners.length,vikingGoods:goods.length,
-  addedBarracks:supply.barracks,toolsmith:supply.toolsmith,authoredGround:{levelled:ground.mode,buildings:ground.buildings,step:ground.step},barracksHeightsChanged:landscape.heights,
+  players:2,darkBuildings:count(buildings,1),darkUnits:156,fireCleanStart:{farmLock:FarmLock,removedFarms},vikingBuildings:84,vikingUnits:count(units,2),vikingGardeners:gardeners.length,vikingGoods:goods.length,
+  addedBarracks:supply.barracks,stoneMine:supply.mine,toolsmith:supply.toolsmith,authoredGround:{levelled:ground.mode,buildings:ground.buildings,step:ground.step},barracksHeightsChanged:landscape.heights,
   barracksShadingsChanged:landscape.shading,
   supplyPiles:supply.piles,rejectedSupplyMutations:rejected,darkPlacementAnchors:placement,runtimeVerified:false},null,2));
 console.log(`PASS: Iron Kingdom has two players, merged Dark camps, manned Viking towers, owned Viking entrances, 24 field soldiers and 8 gardeners on free Viking cells, an added Viking barracks on level ground (footprint at height ${supply.barracks.ground.height}, ${landscape.heights} heights and ${landscape.shading} shadings changed, steps <= ${ground.step}) with weapon and shovel piles, 16 iron bars and 16 coal beside the toolsmith entrance (${supply.toolsmith.entrance}) (${rejected} broken supplies rejected), no Trojans, no Dark farm within FarmLock ${FarmLock} of a Temple fire centre (${removedFarms.length} removed with their flags, broken starts rejected) and room for all four Dark buildings`,JSON.stringify(placement));

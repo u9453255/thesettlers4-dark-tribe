@@ -10,6 +10,38 @@ All in-game testing belongs to you. Offline checks cover code, pinned files, dis
 4. Start a NEW `00_Dark_Tribe_First_Dawn` custom map, player 1 human Dark and player 2 computer Viking. Keep races unchanged. Use a client height of at least 600 pixels.
 5. Observe at least two minutes before other tests: no crash or early victory/defeat. If an ending occurs, record its actual text/winner; sound alone is insufficient. Existing saves retain their old terrain, AI and bank and cannot validate the new scenario economy.
 
+## r47 checks - test first (specialist room)
+
+A computer that loses its builders, diggers or gardeners can recruit them again even when its carriers are down at the reserve: the reserve leaves room for the missing specialists and the barracks waits for them.
+
+**built, model-tested and staged with the full offline workflow on 2026-10-20 (all steps passed); not yet play-tested.** Until the startup line ends with `specialist room r47`, you are still running r46 or older.
+
+1. Start with `Launch Dark Tribe.cmd`. The startup line in `evidence/v02-runtime.log` ends with `toolsmith output watch r46; specialist room r47`.
+2. Play Iron Kingdom and hurt the Viking town once (kill workers or burn buildings): afterwards builders and diggers must come back (`CARRIER_RESERVE player=2 ... room=N builders=... diggers=...` lines with room above 0, then room 0 again), open sites must get finished and houses must appear again.
+3. After the session `python tools/economy-report.py --last`: no "sites without a builder" flag for long stretches, builders above 0 at the end, gardeners replaced after losses, carriers still mostly above keep (no drain to 5).
+
+## r46 checks - test first (toolsmith output watch)
+
+The computer's toolsmith no longer clogs its output with tools nobody takes, so it can make the shovels the plugin orders for new gardeners.
+
+**built, model-tested and staged with the full offline workflow on 2026-10-20 (all steps passed); not yet play-tested.** Until the startup line ends with `toolsmith output watch r46`, you are still running r45 or older.
+
+1. Start with `Launch Dark Tribe.cmd`. The startup line in `evidence/v02-runtime.log` ends with `economy-only keep and Iron Kingdom stone r45; toolsmith output watch r46`.
+2. Play Iron Kingdom (a new game) long enough for the Viking gardeners to die a few times (several attacks). Replacement gardeners must keep coming: `OFFENCE_RECRUIT player=2 gardeners=...` lines continue late in the game and `OFFENCE_RECRUIT_WAIT ... no spare shovels` must not last for more than a few thousand ticks at a time.
+3. In the log, `OFFENCE_TOOL_SURPLUS player=2 good=... lying=... order=N->0` shows the watch clearing the AI's surplus tool orders, and `OFFENCE_TOOLSMITH ... sum=X/8` must stay below 8 (`clogged=0`).
+4. After the session `python tools/economy-report.py --last`: the toolsmith line must show output below 8 and worker 1, and no "toolsmith output full" flag. If the output is still full or the worker is 0, send the log: the diagnostics then say which gate blocks.
+
+## r45 checks - test first (economy-only keep, Iron Kingdom stone)
+
+The computer's carrier pool now counts only real economy buildings (Iron Kingdom: keep 34 instead of 58), and the Iron Kingdom Vikings start with a stone mine on their stone mountain plus 16 stone, so they can keep building houses.
+
+**built, map-tested and staged with the full offline workflow on 2026-10-20 (all steps passed); not yet play-tested. Start a new Iron Kingdom game for the stone mine.** Until the startup line ends with `Iron Kingdom stone r45`, you are still running r44 or older.
+
+1. Start with `Launch Dark Tribe.cmd`. The startup line in `evidence/v02-runtime.log` ends with `economy telemetry r44; economy-only keep and Iron Kingdom stone r45`. The installer upgrade replaces the Iron Kingdom map; start a **new** Iron Kingdom game (a save keeps the old map).
+2. With Alt+9 look at the Viking town: a stone mine stands on the mountain west of the coal mines (around 448,428) and two stone piles lie by the castle area. During the game the mine should get a worker and stone should flow to building sites; new houses should appear over time.
+3. After the session run `python tools/economy-report.py --last`: keep should read about 34 and rise slowly with the kingdom, carriers should stay above keep, the stone column above 0, and the population should grow instead of falling. Gardeners and attacks must come back after losses.
+4. Report if the Vikings still build no houses (then the AI does not staff the mine or stone is not the limit; send the log) or if attacks stop again.
+
 ## r44 checks - test first (economy telemetry)
 
 Every computer writes one row per 500 ticks to `evidence/v02-economy.csv` (population, carriers busy/idle/reserve/keep, housing, buildings and sites by type, soldiers, goods). `python tools/economy-report.py` summarises it and flags drains, stalled construction, starved smiths and flat population.
