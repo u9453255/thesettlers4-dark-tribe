@@ -1,5 +1,12 @@
 # Experiment journal
 
+## Round r51: Ubisoft services job guard (2026-10-21, still 0.2.15)
+
+- User report: the game crashed (r50, pid 27908, Iron Kingdom, tick 4496).
+- Cause (research/CRASH_DIAGNOSTICS_0215.md Round r51): not Dark Tribe code. The Ubisoft services SDK linked into S4_Main.exe ran a job on its own worker thread whose step sequence had no step method; its assert handler has no callback installed and deliberately writes to 0xDEADBAAD. The same crash hit pid 28292 (r23) and pid 9960 (r44); all three came about 35 s after the game started.
+- Fix: a pinned, fail-closed startup patch of the SDK's step runner (0x46854C) parks such a job (its own state setter, Waiting) instead of crashing; the normal step path is unchanged. `UBISERVICES_JOB_PARKED count= vtable= rva= class=` logs every case with the job's class. `inspect-construction.py` checks the pins against the file and three load addresses, the replacement's disassembly and the job state machine.
+- Status: built and staged with the full offline workflow on 2026-10-21; not verified in game. Startup marker: `...; gardener supply and land defence r50; Ubisoft services job guard r51`.
+
 ## Round r50: gardener supply and land defence (2026-10-20, still 0.2.15)
 
 - User request: implement `research/R50_PLAN_0215.md` (field readings of pid 18584 on r49 and pid 31460 on r48, Iron Kingdom: replacement gardeners slow, the r49 drop emptying piles and jamming on a lying shovel, land defences cut short, deferred behind attacks, sent after far units and left without gardeners while attacks ran).

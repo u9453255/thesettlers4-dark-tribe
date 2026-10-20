@@ -15,6 +15,7 @@
   "reservation_rva": "0x136470 once, skipped when native phases already reserved",
   "unit_blockers": "waited for without timeout refund, as native phase 7",
   "site_panel_guard": "CBuildingSiteRole slot 22 (entry RVA 0xC59214 -> 0x143D10) wrapped once at startup; no economy at the entrance: transient info copy without inhabitant/tool and piles 0, restored after the call",
+  "ubiservices_step_guard": "r51: the ubiservices step runner 0x468520 crashes (assert handler 0x341660 writes 0xDEADBAAD, no assert callback) when a job step has no method; the branch at 0x46854C (33 bytes) parks the job instead: state setter 0x4CC550 with Waiting (1, legal from Running), epilogue 0x46866B; the runner re-queues it (0x45FBD5)",
   "generated_signature_regions": 57,
   "relocation_data_copy_bases": [
     "0x400000",

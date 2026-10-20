@@ -10,6 +10,17 @@ All in-game testing belongs to you. Offline checks cover code, pinned files, dis
 4. Start a NEW `00_Dark_Tribe_First_Dawn` custom map, player 1 human Dark and player 2 computer Viking. Keep races unchanged. Use a client height of at least 600 pixels.
 5. Observe at least two minutes before other tests: no crash or early victory/defeat. If an ending occurs, record its actual text/winner; sound alone is insufficient. Existing saves retain their old terrain, AI and bank and cannot validate the new scenario economy.
 
+## r51 checks - test first (Ubisoft services job guard)
+
+The game no longer dies when the built-in Ubisoft online-services component hits a broken background job. That crash came about 35 seconds after the game started, in about one session in twenty (3 of the 61 logged sessions that ran that long); it was not caused by Dark Tribe.
+
+**built and staged with the full offline workflow on 2026-10-21; not verified in game.** Until the startup line ends with `Ubisoft services job guard r51`, you are still running r50 or older.
+
+1. Start with `Launch Dark Tribe.cmd`. The startup line in `evidence/v02-runtime.log` ends with `gardener supply and land defence r50; Ubisoft services job guard r51`, followed by `Ubisoft services job guard installed (RVA 0x46854C: ...)`.
+2. Play as usual, including several fresh starts of the game (the crash came about 35 s after a start).
+3. If `UBISERVICES_JOB_PARKED count=... class=...` appears in the log, the guard caught the crash: the game should simply go on. Send that line; it names the Ubisoft job behind it.
+4. A crash with `deadbaad` in the log or in `Documents\TheSettlers4\Log\TraceNNN.txt` should not happen any more; if it does, send the trace and the log.
+
 ## r50 checks - test first (gardener supply and land defence)
 
 Computers replace lost gardeners faster, their toolsmith drop never empties a pile or jams on a lying shovel, and they defend their own land better: a fast Dark spread is answered at once, a winning land defence keeps going, a defence goes to the land being lost rather than to a few far units, and attacks leave four gardeners at home while that land is under pressure. Attacks themselves are unchanged.

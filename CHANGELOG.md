@@ -6,6 +6,9 @@ The version stays **0.2.15** while updates come as numbered rounds. The mod's st
 
 ## 0.2.15 updates (October 2026)
 
+### r51: No more sudden crash shortly after starting the game (*not yet play-tested*)
+- About 35 seconds after the game started, Ubisoft's built-in online services sometimes crashed the whole game (about one session in twenty). This was not caused by Dark Tribe, but the mod now catches that broken background job and the game carries on.
+
 ### r50: Computers defend their land better and replace gardeners faster (*not yet play-tested*)
 - Computers replace lost gardeners sooner: they keep only one spare shovel and order up to six at a time.
 - A full toolsmith no longer throws away the last tool of a kind, and a single shovel lying there can no longer block it for good.

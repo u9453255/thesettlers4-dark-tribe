@@ -151,6 +151,39 @@ def run():
             ('mov',f'al, byte ptr [{hex(base+0xdcdb24)}]'),('mov','byte ptr [edi + 0x21], al'),('jmp','0x56b71a'))
     assert pe.get_data(0x16b594,3)==bytes([0x88,0x47,0x21]) and ('mov','byte ptr [ebx + 0x21], cl') in rows(0x16af74,3) and ('mov','byte ptr [ecx + 0x21], bl') in rows(0x16b4d6,3)
     assert 'static bool installNoHealing(){' in source and 'at[11]=0x90;at[12]=0x90;at[13]=0x90;' in source and 'FlushInstructionCache(GetCurrentProcess(),at+11,3)' in source and 'if(!installNoHealing()){fatal=true;' in source
+    # r51: the Ubisoft services job guard (research/CRASH_DIAGNOSTICS_0215.md Round r51). The SDK's step runner 0x468520
+    # asserts when a job's step sequence holds no step method; with no assert callback (dword 0x122A6CC) the handler
+    # 0x341660 writes to 0xDEADBAAD (three field crashes, each about 35 s after the game started). The plugin replaces the
+    # branch at 0x46854C (33 bytes, reached only by falling through both null checks) with: count the job, park it through
+    # its own state setter 0x4CC550 with Waiting (1), leave through the function's epilogue 0x46866B.
+    import re
+    ubi=source[source.index('static bool installUbiStepGuard(){'):source.index('static void ubiServicesNote(){')]
+    def arr(name):
+        m=re.search(r'BYTE '+name+r'\[(\d+)\]=\{([^}]*)\}',ubi);vals=[int(v,0) for v in m.group(2).split(',')];assert len(vals)==int(m.group(1)),name;return bytes(vals)
+    def reloc(b,off,rva):return b[:off]+(base+rva).to_bytes(4,'little')+b[off+4:]
+    assert pe.get_data(0x468520,16)==reloc(arr('head'),7,0xd62444) and pe.get_data(0x468530,28)==arr('decide') and pe.get_data(0x46854c,33)==reloc(arr('broken'),3,0xb20358) and pe.get_data(0x46866b,17)==arr('tail')
+    assert pe.get_data(0x4cc550,35)==reloc(arr('setHead'),10,0xd62444) and pe.get_data(0x4cc718,21)==arr('setTail')
+    for rva in (0x468527,0x46854f,0x4cc55a):assert rva in {r.rva for block in pe.DIRECTORY_ENTRY_BASERELOC for r in block.entries if r.type==3},hex(rva)
+    for address in (base,0xad0000,0x60000000):  # the installer's memcmp at other load addresses (the field crash ran at 0xAD0000)
+        image_bytes=pefile.PE(str(executable)).get_memory_mapped_image(ImageBase=address)
+        at=lambda b,off,rva:b[:off]+(address+rva).to_bytes(4,'little')+b[off+4:]
+        assert image_bytes[0x468520:0x468530]==at(arr('head'),7,0xd62444) and image_bytes[0x46854c:0x46856d]==at(arr('broken'),3,0xb20358) and image_bytes[0x4cc550:0x4cc573]==at(arr('setHead'),10,0xd62444),hex(address)
+        assert image_bytes[0x468530:0x46854c]==arr('decide') and image_bytes[0x46866b:0x46867c]==arr('tail') and image_bytes[0x4cc718:0x4cc72d]==arr('setTail'),hex(address)
+    patched=[(i.mnemonic,i.op_str) for i in cs.disasm(arr('patch'),base+0x46854c)]
+    assert patched==[('mov','ecx, dword ptr [ebp + 8]'),('mov','eax, dword ptr [ecx]'),('mov','dword ptr [0], eax'),('lock inc','dword ptr [0]'),('push','1'),('call',hex(base+0x4cc550)),('jmp',hex(base+0x46866b)),('nop',''),('nop',''),('nop',''),('nop','')],patched
+    ordered(rows(0x468539,0x13),('cmp','dword ptr [esi], 0'),('jne',hex(base+0x4685ea)),('cmp','dword ptr [esi + 8], 0'),('jne',hex(base+0x4685ea)))
+    assert pe.get_data(0xb20320,55)==b'm_pStepMethod != nullptr || m_pStepMethodEx != nullptr\x00' and ('call',hex(base+0x341660)) in rows(0x4685cd,5)
+    assert ('je',hex(base+0x341676)) in rows(0x341660,0x16) and ('mov','dword ptr [0xdeadbaad], 0') in rows(0x341676,10) and ('call','eax') in rows(0x468667,4)
+    for i in cs.disasm(pe.get_data(0x468520,0x15c),base+0x468520):  # nothing outside the dead branch lands inside the replaced bytes
+        if (i.mnemonic.startswith('j') or i.mnemonic=='call') and i.op_str.startswith('0x') and 0x46854c<=int(i.op_str,16)-base<0x46856d:assert 0x46854c<=i.address-base<0x4685ea,hex(i.address)
+    ordered(rows(0x4cc565,0xe),('mov','edi, dword ptr [ebp + 8]'),('mov','esi, ecx'),('push','edi'),('push','dword ptr [esi + 0xc]'),('call',hex(base+0x4f7f20)))
+    assert ('mov','dword ptr [esi + 0xc], edi') in rows(0x4cc71b,3) and ('ret','4') in rows(0x4cc72a,3)
+    ordered(rows(0x4f7f72,0x17),('cmp','edi, 3'),('jne',hex(base+0x4f7f89)),('cmp','esi, 1'),('je',hex(base+0x4f816d)),('cmp','esi, 4'),('je',hex(base+0x4f816d)))  # Running -> Waiting or Complete
+    ordered(rows(0x45404f,0xe),('lea','ecx, [ebx + 0x20]'),('push','ebx'),('call',hex(base+0x468520)))
+    ordered(rows(0x45426d,0xa),('cmp','dword ptr [ebx + 0xc], 3'),('je',hex(base+0x454040)))  # the step loop repeats while Running
+    ordered(rows(0x45fbb7,0x2c),('cmp','dword ptr [esi + 0xc], 2'),('push','3'),('call',hex(base+0x4cc550)),('call',hex(base+0x453c60)),('cmp','eax, 4'),('cmp','eax, 1'),('cmp','eax, 2'))
+    assert 'if(!installUbiStepGuard()){fatal=true;' in source and 'return 18;' in source and 'dtdiag::beat(true,true);ubiServicesNote();' in source and 'UBISERVICES_JOB_PARKED' in source and 'Ubisoft services job guard r51' in source
+    assert source.index('if(!installReserveHook())')<source.index('if(!installUbiStepGuard())')<source.index('Version 0.2.15 native callbacks installed')
     # r12: own idle units on the reserved shape are ordered off (throttled); the
     # mod's own moves are ignored by the send callback.
     assert 'ops.evict(j)' in model and 'void blockers(' in growth and 'internalSend' in source and 'SITE_EVICT' in source
@@ -227,6 +260,7 @@ def run():
         reservation_rva='0x136470 once, skipped when native phases already reserved',
         unit_blockers='waited for without timeout refund, as native phase 7',
         site_panel_guard='CBuildingSiteRole slot 22 (entry RVA 0xC59214 -> 0x143D10) wrapped once at startup; no economy at the entrance: transient info copy without inhabitant/tool and piles 0, restored after the call',
+        ubiservices_step_guard='r51: the ubiservices step runner 0x468520 crashes (assert handler 0x341660 writes 0xDEADBAAD, no assert callback) when a job step has no method; the branch at 0x46854C (33 bytes) parks the job instead: state setter 0x4CC550 with Waiting (1, legal from Running), epilogue 0x46866B; the runner re-queues it (0x45FBD5)',
         generated_signature_regions=len(PINS),relocation_data_copy_bases=['0x400000','0x360000','0x60000000'],
         gameplay_completion_verified=False,economy_presence_on_dark_land_verified=False)
     (ROOT/'research/construction-inplace-checks.json').write_text(json.dumps(report,indent=2))

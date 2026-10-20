@@ -112,3 +112,42 @@ Limits:
 - `tools/read-crash-dump.py` reads WER and freeze dumps offline: the exception, the heap failure record and a stack scan with export names. It reproduces the chain above from `S4_Main.exe.30500.dmp`.
 
 None of this is verified inside the game. TESTING.md r26 lists the user's checks.
+
+## Round r51: the Ubisoft services crash about 35 s after the game starts (2026-10-21)
+
+The user reported a crash on r50 (pid 27908, Iron Kingdom, tick 4496). Checked offline from the runtime log, the game traces and the pinned executable; no game was started or attached.
+
+### Evidence
+
+- `evidence/v02-runtime.log`: `FIRST_CHANCE code=c0000005 ... gameRva=00341676 ... thread=3140 access=write target=deadbaad`. Thread 3140 is not the main game thread (12512). The main thread kept ticking for about one second (tick 4510), then the process ended. No WER dump was written.
+- `Trace113.txt` (the game's own trace, same clock): `Exception 0xc0000005 at 0x00e11676 ... Write to location 0xdeadbaad`, with the stack `sub_341660+22 <- sub_453C60+1021 <- sub_45FBA0+45 <- sub_45F100+27 <- sub_3B0A90+64 <- sub_3AFF90+956 <- sub_50FA80+18 <- sub_434160+185 <- sub_9ACD44+87 <- BaseThreadInitThunk`. The plugin's stack scan adds `0x4685d2` (inside `sub_468520`), which the trace's frame walk skips.
+- The same crash happened twice before, with the same stack and the same `deadbaad` write: pid 28292 (r23 build, First Dawn, `Trace071.txt`) and pid 9960 (r44 build, Iron Kingdom, `Trace105.txt`). So it is not caused by r50 or by any one round.
+- All three came 34.8 to 35.4 s after the process started (trace opened at 24747921, 49156968 and 116692250 ms; crashes at 24783359, 49191890 and 116727093). An autosave had finished 1.6 to 4.9 s before each crash, but about 1,800 autosaves in the user's traces were followed by no crash. The fixed delay after start points to a timer the services SDK starts at launch (most likely a request timeout racing its response); that part is a hypothesis.
+
+### What fails (file-only disassembly, `work/native-analysis/ai/scripts/q.py`)
+
+- `sub_434160` is the thread entry of the Ubisoft services SDK linked into S4_Main.exe (it asserts `param != nullptr` with the source path `.../ubiservices/client-sdk/private/ubiservices`). `sub_45F100`/`sub_45FBA0` run one job per update: a Ready (2) job is set to Running (3) through the job's state setter `sub_4CC550` and stepped by `sub_453C60`, which logs "Processing Job:" and repeats the step while the job stays Running (`0x45426D`). After it, the runner deletes a Complete (4) job and re-queues a Waiting (1) or Ready (2) one; anything else is "Job is in invalid state".
+- `sub_468520` runs one step of the job's step sequence (at job + 0x20). When both `m_pStepMethod` (+0) and `m_pStepMethodEx` (+8) are null it asserts `m_pStepMethod != nullptr || m_pStepMethodEx != nullptr` ("Missing requirement"). The SDK has no log manager (dword `0x122A6A4` is 0) and no assert callback (dword `0x122A6CC`), so the assert handler `sub_341660` takes its fallback, `mov dword ptr [0xDEADBAAD], 0`: a deliberate crash. Without that assert the function would call the null step at `0x468669`.
+- The job runner holds a reference to the job while it steps it, so the job object is alive; only its step sequence is empty. A job that is Ready while its sequence has no step points to a race inside the SDK (a job woken a second time after its steps ended). The job's class could not be read: no dump exists.
+- The plugin has no part in this path. Its only code on other threads is the save import hooks (`CreateFileA/W`, `WriteFile`, `CloseHandle` of the EXE's import table, which the statically linked runtime and the SDK also use); they pass every non-`.sav` call through and keep no state for it.
+
+### The guard (round r51)
+
+`installUbiStepGuard` (dark-tribe.cpp, at startup after the carrier reserve hook) replaces the 33 bytes of the broken branch at `0x46854C`, which is reached only when both null checks fail, with:
+
+```
+mov ecx, [ebp+8]            ; the job (the runner's own argument)
+mov eax, [ecx]
+mov [ubiParkedVtable], eax  ; plugin global: the job's vtable
+lock inc [ubiParked]        ; plugin global: how many jobs were parked
+push 1                      ; Job::Waiting
+call 0x4CC550               ; the job's own state setter (thiscall, ret 4); Running -> Waiting is legal (0x4F7F20)
+jmp 0x46866B                ; the function's own epilogue (cookie check, pop esi, ret 4)
+nop x4
+```
+
+The step loop then ends (the job is no longer Running) and the runner re-queues the job; if something wakes it again, it is parked again. The normal step path is unchanged. A parked job never finishes, so whatever online feature started it (single-player does not depend on one) gets no answer instead of the game dying. The tick logs `UBISERVICES_JOB_PARKED count= vtable= rva= class=` (the first time, then at most once a minute) with the job's RTTI class, so the next occurrence names the job.
+
+Pins (fail closed, `Pinned Ubisoft services step guard signature mismatch; plugin disabled`, code 18): the function's prologue with the relocated security cookie, both null checks, the replaced branch with its relocated message, the epilogue, and the setter's prologue and state store; a page this module already patched passes. `tools/inspect-construction.py` checks these byte arrays against the file and against the image rebased to 0x400000, 0xAD0000 (the field crash's load address) and 0x60000000, disassembles the replacement (call target 0x4CC550, jump target 0x46866B), and asserts the state machine facts above (the assert string and its deliberate crash, no other branch into the replaced bytes, the setter's ABI and store, the legal Running -> Waiting transition, the step loop and the runner's re-queue).
+
+Not verified in game. If the SDK later relies on the parked job finishing (for example a wait at game exit), the symptom would change from this crash to something else; `UBISERVICES_JOB_PARKED` in the log marks every case.
