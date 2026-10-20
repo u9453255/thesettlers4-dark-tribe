@@ -74,6 +74,23 @@ Field reading of r46 (pid 18132, two Iron Kingdom games). Game 1 (104,000 ticks)
 - `CARRIER_RESERVE` logs `room= builders= diggers=` and fires when the room changes.
 - Not verified in game. Known limits: a kingdom whose AI never wants 6 builders keeps a small permanent room (its reserve sits that much below the keep); the room does not help a kingdom without hammers (builders need one each) or without iron and coal for the toolsmith.
 
+## Round r48: tool orders run until the output fills (as implemented)
+
+Field reading of r47 (pid 33752, Iron Kingdom, 82,000 ticks): builders 15, diggers 10, the room worked (3..4 all game, 176 idle carriers at the end), but **iron ore stayed 0 from tick 500 to the end**: the 16 start iron bars were gone by 3,500, the toolsmith's iron input was empty for the rest of the game, no tool, no sword (swords 0 at every census), soldiers stuck at 61, three attacks in all. Mine workers were 10 for 13 mines (7 coal, 3 iron, 2 gold, the r45 stone mine); coal (18 -> 66) and stone flowed, so the three unstaffed mines were the iron mines. A mine worker needs a pickaxe: pickaxes were 0..1 all game, and the only `OFFENCE_TOOL_SURPLUS` line is at tick 1,800: `good=25 lying=1 order=12->0`. The AI had ordered PICKAXE x12 for its unstaffed mines once, the r46 watch cleared it because one pickaxe lay in the output, and the AI never sent it again (`orders=25:0` in every later `OFFENCE_TOOLSMITH`). In pid 18132 the AI happened to re-order (2, then 1) for mines built later; here it did not.
+
+- Fix (`surplusOrder(good, lying, order, outSum)`): an order is surplus only when the output holds `OutputNearFull` 6 of its 8 and at least `ToolSurplus` 2 of that tool lie there. A batch that workers keep taking runs on; the clog of pid 2476 (six pickaxes and a hammer) is still stopped two goods before the capacity, leaving room for the shovels.
+- `economy-report.py` flags mines without a worker (ready mines above settler type 14) and a dead iron chain (iron mines, no ore, no bars).
+- Not verified in game. The AI's one-shot tool orders are a native fact to keep in mind: never clear an order the AI may not repeat unless the output really is about to clog.
+
+## Round r49: shovel priority at the toolsmith (as implemented)
+
+User request (2026-10-20): when gardeners for attacks are missing, push the shovel request to the toolsmith, and if its output is full, remove the tool that is most numerous and fill the request with shovels.
+
+- The order part already exists (r29: up to 4 shovels while gardeners are missing and fewer than 3 free shovels exist; the shovel order is never cleared). r48 keeps the AI's batch orders from being cut short; r49 closes the remaining gap: tools already lying in a full output.
+- Native removal (file-only, pinned): CPile has an unreserved-removal routine at 0x16F8D0(amount) that takes at most `count - reserved` goods, adjusts the economy's per-good stock counter (0x16FE80: word eco+0x290+good*2) and tells the pile role (slot +0xC; +0x10 and reserved = 0 when the pile is empty). Its native callers are building and market code (sub_142390, sub_1551B0, sub_155B60, sub_1565E0), so stock, reservations and requests stay consistent. The sibling 0x16F810 removes reserved goods (carriers picking up), 0x16F870 adds.
+- Plugin: `offenceTools` records whether shovels are owed (ordering, already ordered or order refused). The tool watch (every 10 ticks) then, at most once per `DropEvery` 250 ticks, with the output at `DropAt` 7 or more and no free shovel lying there, destroys one unreserved piece of the most numerous non-shovel tool (`dropCandidate`, `Native::dropFromPile`), logged as `OFFENCE_TOOL_DROP player= good= lying=a->b reserved= outSum= drops=`. Never a reserved good (a worker is on the way for it), never a shovel. The iron bar and coal of the dropped tool are lost; that is the price of an unused tool.
+- Not verified in game. Expected to be rare with r48 (batches are taken by waiting workers before the output fills).
+
 ## Round r38: walked progress and steady sieges (as implemented)
 
 User report (2026-10-20, First Dawn on r37): "still behave weirdly, stops attack at the middle of it, It moves a bit then going back".

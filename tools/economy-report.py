@@ -165,6 +165,13 @@ def analyse(samples):
     dry_in = longest(runs(smith, lambda s: s['tsin'] == 0 and s['ironbar'] + s['coal'] > 4))
     if dry_in and dry_in[2] >= 6:
         flags.append(f'toolsmith input empty while iron or coal is in stock for {dry_in[2]} samples from tick {dry_in[0]}')
+    mines = lambda s: sum(s['ready_by_type'].get(t, 0) for t in (14, 15, 16, 17, 18))
+    short = sum(1 for s in samples if mines(s) > s['settlers_by_type'].get(14, 0))
+    if short * 2 >= len(samples) and samples:
+        flags.append(f'mines without a worker in {short} of {len(samples)} samples (pickaxes?)')
+    idle_iron = sum(1 for s in eco if s['ironmines'] > 0 and s['ironore'] == 0 and s['ironbar'] == 0)
+    if eco and idle_iron * 2 >= len(eco):
+        flags.append(f'iron chain dead (iron mines but no ore and no bars) in {idle_iron} of {len(eco)} samples')
     window = [s for s in samples if s['tick'] >= last['tick'] - 30000]
     if len(window) >= 20 and span >= 30000:
         growth = window[-1]['population'] - window[0]['population']

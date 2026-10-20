@@ -1540,9 +1540,25 @@ constexpr int ShovelBatch=4,ShovelContinuous=100;
 // pickaxes and a hammer the AI had ordered sat in the output for 120,000 ticks; two tools were made in that time, no
 // shovel, and the gardeners died out). An order for a tool that already lies in an output pile is surplus and is
 // cleared by the plugin's tool watch; never the shovel order, never a continuous order (100).
-constexpr int OutputCapacity=8,ToolSurplus=1;constexpr uint32_t ToolWatchEvery=10;
-inline bool surplusOrder(int good,int lying,int order){return good!=31&&lying>=ToolSurplus&&order>0&&order<ShovelContinuous;}
+// r48: the AI sends some tool orders once (pid 33752: PICKAXE x12 at tick 1,800 for its unstaffed mines, never again);
+// clearing such a batch after the first tool left three iron mines without a worker for the whole game, and with no
+// iron ore the kingdom made no bars, no tools and no weapons. An order is surplus only when the output is nearly full
+// (OutputNearFull of OutputCapacity) and at least ToolSurplus of that tool already lie there: the clog is stopped, a
+// batch that workers keep taking is not.
+constexpr int OutputCapacity=8,ToolSurplus=2,OutputNearFull=6;constexpr uint32_t ToolWatchEvery=10;
+inline bool surplusOrder(int good,int lying,int order,int outSum){return good!=31&&lying>=ToolSurplus&&outSum>=OutputNearFull&&order>0&&order<ShovelContinuous;}
 inline bool clogged(int outSum){return outSum>=OutputCapacity;}
+// r49: shovel priority (user request). While the plugin owes shovels and the output holds DropAt or more goods with no
+// free shovel among them, the most numerous non-shovel tool loses one unreserved piece (the pile's own removal 0x16F8D0,
+// which keeps the economy's stock counter and the pile role consistent), so the next round can make a shovel. One piece
+// per DropEvery ticks; never a reserved good, never a shovel. Returns the output index to drop from, -1 for none.
+constexpr int DropAt=7;constexpr uint32_t DropEvery=250;
+template<class P> inline int dropCandidate(const P*out,int n,int outSum){
+ if(outSum<DropAt)return -1;
+ for(int i=0;i<n;i++)if(out[i].good==31&&out[i].count-out[i].reserved>0)return -1;
+ int best=-1,most=0;for(int i=0;i<n;i++){int free=out[i].count-out[i].reserved;if(out[i].good!=31&&free>most){most=free;best=i;}}
+ return best;
+}
 // The order byte the plugin wants while shovels are short: the shovels still needed, at most a batch.
 inline int shovelTarget(int alive,int pending,int shovels,int wanted=GardenersWanted){
  int missing=wanted-alive-std::max(0,pending),free=std::max(0,shovels);

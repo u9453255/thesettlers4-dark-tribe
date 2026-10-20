@@ -1,5 +1,17 @@
 # Experiment journal
 
+## Round r49: shovel priority at the toolsmith (2026-10-20, still 0.2.15)
+
+- User request: when gardeners are missing, the shovel request must get through even if the toolsmith's output is full of other tools.
+- Implementation (research/AI_OFFENCE_0215.md Round r49): while shovels are owed and the output holds 7 or more goods with no free shovel, one unreserved piece of the most numerous other tool is destroyed through the pile's own removal routine 0x16F8D0 (stock counter and pile role stay consistent), at most one per 250 ticks; `OFFENCE_TOOL_DROP` logs it. Pins for the routine and the CPile vtable.
+- Status: built, model-tested and staged with the full offline workflow on 2026-10-20; the user reports it working in game (2026-10-20). Startup marker: `...; tool orders until the output fills r48; shovel priority drop r49`.
+
+## Round r48: tool orders run until the output fills (2026-10-20, still 0.2.15)
+
+- Field reading of r47 (pid 33752): iron ore 0 all game, no bars, no tools, no swords. The AI had ordered PICKAXE x12 once for its unstaffed mines; the r46 watch cleared the order after the first pickaxe and the AI never repeated it, so the three iron mines stayed without a worker.
+- Fix (research/AI_OFFENCE_0215.md Round r48): `surplusOrder` clears a tool order only when the output holds 6 of its 8 goods and two or more of that tool lie there. Report flags for unstaffed mines and a dead iron chain.
+- Status: built, model-tested and staged with the full offline workflow on 2026-10-20; the user reports it working in game (2026-10-20). Startup marker: `...; specialist room r47; tool orders until the output fills r48`.
+
 ## Round r47: specialist room in the carrier reserve (2026-10-20, still 0.2.15)
 
 - Field reading of r46 (pid 18132, game 2): a mass death at tick 44,000 took every builder; carriers fell to the keep and no builder, digger or gardener could be made for 66,000 ticks (the native specialist processor sub_D57D0 needs reserve < carriers - busy, the same bar as the barracks), so no house was built and the kingdom froze.

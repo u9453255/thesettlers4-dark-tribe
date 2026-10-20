@@ -1258,7 +1258,16 @@ static void ledgerRows(){
 }
 // r46: surplus tool orders are cleared (never shovels, never continuous), and the output capacity marks a clog.
 static void toolWatch(){
- assert(surplusOrder(25,1,4)&&surplusOrder(18,6,1)&&surplusOrder(4,2,99)&&!surplusOrder(31,6,4)&&!surplusOrder(25,0,4)&&!surplusOrder(25,1,0)&&!surplusOrder(25,1,100)&&!surplusOrder(25,1,-1));
+ /* r48: cleared only with a nearly full output and at least two of the tool lying there; a batch for waiting workers runs on */
+ assert(surplusOrder(25,2,4,6)&&surplusOrder(18,6,1,7)&&surplusOrder(4,2,99,8)&&!surplusOrder(31,6,4,8)&&!surplusOrder(25,0,4,7)&&!surplusOrder(25,2,0,7)&&!surplusOrder(25,2,100,7)&&!surplusOrder(25,2,-1,7));
+ assert(!surplusOrder(25,1,12,2)&&!surplusOrder(25,1,12,7)&&!surplusOrder(25,5,12,5)&&surplusOrder(25,5,12,6)&&OutputNearFull<OutputCapacity&&ToolSurplus>=2);
  assert(!clogged(0)&&!clogged(7)&&clogged(8)&&clogged(9)&&ToolWatchEvery<=50);
+ /* r49: drop from the fullest non-shovel pile only at DropAt with no free shovel lying there and never a reserved piece */
+ struct L{int good,count,reserved;};
+ {L a[]={{4,0,0},{18,1,0},{25,6,0},{31,0,0}};assert(dropCandidate(a,4,7)==2&&dropCandidate(a,4,8)==2&&dropCandidate(a,4,6)==-1);}
+ {L b[]={{18,2,0},{25,5,0},{31,1,0}};assert(dropCandidate(b,3,8)==-1);}                  /* a free shovel is there: wait for the recruit */
+ {L c[]={{18,2,0},{25,5,0},{31,1,1}};assert(dropCandidate(c,3,8)==1);}                   /* the shovel is reserved: make room for another */
+ {L d[]={{18,3,3},{25,4,4},{31,0,0}};assert(dropCandidate(d,3,7)==-1);}                  /* everything reserved: nothing to drop */
+ {L e[]={{18,3,1},{25,3,0},{31,0,0}};assert(dropCandidate(e,3,7)==1&&DropAt<OutputCapacity&&DropEvery>=ToolWatchEvery);}
 }
 int main(){toolsmithShovels();basics();targetOrder();geometry();gating();styles();allied();campaign();reattack();fallback();defence();gardenerLosses();farmReturns();steering();sweeping();hunting();reclaiming();landFirst();marchBudget();losses();adoption();timeouts();detours();reviewFixes();fireRules();guarding();guardReview();keepAudit();soak();soakTwo();scaling();convoyRules();convoyField();convoySoak();defending();reclaimRegression();unreachable();reviewR33();defenceSoak();carrierReserveFloor();ledgerRows();toolWatch();puts("PASS: offence-tests");return 0;}

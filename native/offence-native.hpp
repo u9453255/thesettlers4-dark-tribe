@@ -472,7 +472,7 @@ public:
  // holds a good; sub_14CE20/0x14D008: the next ordered tool from the last index +0x17D into +0x17C). Piles: good +0x40,
  // count +0x41 (CPile slot +0x28), reserved +0x42, entity flag 0x10 while production runs. Orders: the eco's tool list
  // eco+0x354 with the counts eco+0x348.
- struct ToolPile {int good=0,count=0,reserved=0;bool busy=false;};
+ struct ToolPile {int good=0,count=0,reserved=0;bool busy=false;uint16_t id=0;};
  struct Toolsmith {bool found=false;uint16_t id=0;int state=-1,worker=-1,product=-1,last=-1,outSum=0,inMin=-1,outs=0,ins=0,tools=0;uint32_t flags=0;ToolPile out[8],in[4];int goods[16]={},orders[16]={};};
  Toolsmith toolsmith(uint8_t p,uintptr_t eco)const{
   Toolsmith k;if(p<2||p>8||!eco)return k;uint32_t head=0;if(!read(image+0x10eea74+(p*0x53+21)*4,head))return k;uint16_t id=(uint16_t)head;
@@ -480,7 +480,7 @@ public:
    if(value<BYTE>(e+10)==8&&value<uint16_t>(e+12)==21&&(value<BYTE>(e+32)>>4)==p&&(bits&0x2000000)&&!(bits&0x4000000)&&role&&value<uintptr_t>(role)==image+0xc59094&&buildingEconomy(e)==eco&&readable(role,0x1a0)){
     k.found=true;k.id=id;k.flags=bits;k.state=value<BYTE>(role+4);k.worker=value<BYTE>(role+0x1d);k.product=value<BYTE>(role+0x17c);k.last=value<BYTE>(role+0x17d);
     auto piles=[&](uintptr_t at,ToolPile*list,int max,int&n,bool output){uintptr_t b=value<uintptr_t>(at),e2=value<uintptr_t>(at+4);if(!b||e2<b||e2-b>2*(uintptr_t)max||!readable(b,e2-b))return;
-     for(uintptr_t q=b;q+2<=e2;q+=2){uintptr_t pile=entity(value<uint16_t>(q));if(!pile)continue;ToolPile&t=list[n++];t.good=value<BYTE>(pile+0x40);t.count=value<BYTE>(pile+0x41);t.reserved=value<BYTE>(pile+0x42);t.busy=(value<uint32_t>(pile+0x14)&0x10)!=0;
+     for(uintptr_t q=b;q+2<=e2;q+=2){uintptr_t pile=entity(value<uint16_t>(q));if(!pile)continue;ToolPile&t=list[n++];t.id=value<uint16_t>(q);t.good=value<BYTE>(pile+0x40);t.count=value<BYTE>(pile+0x41);t.reserved=value<BYTE>(pile+0x42);t.busy=(value<uint32_t>(pile+0x14)&0x10)!=0;
       if(output)k.outSum+=t.count;else k.inMin=k.inMin<0?t.count:std::min(k.inMin,t.count);}};
     piles(role+0x180,k.out,8,k.outs,true);piles(role+0x18c,k.in,4,k.ins,false);
     uintptr_t list=0,listEnd=0,counts=0,countsEnd=0;
@@ -500,6 +500,12 @@ public:
  // r46: clear one tool's order through the menu handler (0xD6A90 amount 0) unless it is 0 already or continuous (100);
  // returns the order before the call.
  int clearOrder(uintptr_t eco,int good){int before=orderOf(eco,good);if(before<=0||before>=100)return before;((void(__thiscall*)(void*,int,int))(image+0xd6a90))((void*)eco,good,0);dtmem::invalidate();return before;}
+ // r49: destroy one unreserved good of a pile through the pile's own removal (0x16F8D0(amount): takes at most count -
+ // reserved, adjusts the economy's stock counter eco+0x290+good*2 through 0x16FE80, tells the pile role, slot +0xC and
+ // +0x10 when the pile is empty); its native callers are building and market code. The entity must carry the CPile
+ // vtable 0xC5A7BC. Returns the count after the call, -1 when refused.
+ int dropFromPile(uint16_t id){uintptr_t pile=entity(id);if(!pile||value<uintptr_t>(pile)!=image+0xc5a7bc)return -1;int count=value<BYTE>(pile+0x41),reserved=value<BYTE>(pile+0x42);if(count-reserved<1)return -1;
+  ((void(__thiscall*)(void*,int))(image+0x16f8d0))((void*)pile,1);dtmem::invalidate();return value<BYTE>(pile+0x41);}
  // The eco's order count for SHOVEL (31): the tool list is the byte vector eco+0x354..+0x358, the
  // order counts the parallel byte vector eco+0x348..+0x34C (0xD6A90, consumer 0x14D008, save 0xD3F02).
  // -1 when the economy has no shovel slot.

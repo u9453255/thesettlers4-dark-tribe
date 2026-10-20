@@ -10,6 +10,26 @@ All in-game testing belongs to you. Offline checks cover code, pinned files, dis
 4. Start a NEW `00_Dark_Tribe_First_Dawn` custom map, player 1 human Dark and player 2 computer Viking. Keep races unchanged. Use a client height of at least 600 pixels.
 5. Observe at least two minutes before other tests: no crash or early victory/defeat. If an ending occurs, record its actual text/winner; sound alone is insufficient. Existing saves retain their old terrain, AI and bank and cannot validate the new scenario economy.
 
+## r49 checks - test first (shovel priority drop)
+
+When gardeners are missing and the computer's toolsmith output is full of other tools, one of the most numerous ones is thrown away so a shovel can be made.
+
+**built, model-tested and staged with the full offline workflow on 2026-10-20; the user reports it working in game (2026-10-20).** Until the startup line ends with `shovel priority drop r49`, you are still running r48 or older.
+
+1. Start with `Launch Dark Tribe.cmd`. The startup line in `evidence/v02-runtime.log` ends with `tool orders until the output fills r48; shovel priority drop r49`.
+2. Play as before. Gardeners must keep being replaced after losses; if the output ever fills, `OFFENCE_TOOL_DROP player=2 good=... lying=a->b ... drops=N` lines appear (one per 250 ticks at most) and shovels follow. No line is also fine: it means the output never filled.
+3. After the session `python tools/economy-report.py --last`: no "toolsmith output full" flag, gardeners above 0 late in the game, mines staffed (no "mines without a worker" flag).
+
+## r48 checks - test first (tool orders until the output fills)
+
+The toolsmith watch no longer cuts a batch order short: the AI's pickaxes, hammers and axes get made as long as the output has room, and only a nearly full output with two or more of one tool lying there clears that tool's order.
+
+**built, model-tested and staged with the full offline workflow on 2026-10-20; the user reports it working in game (2026-10-20).** Until the startup line ends with `tool orders until the output fills r48`, you are still running r47 or older.
+
+1. Start with `Launch Dark Tribe.cmd`. The startup line in `evidence/v02-runtime.log` ends with `specialist room r47; tool orders until the output fills r48`.
+2. Play Iron Kingdom: the Viking iron mines must get workers early (iron ore and iron bars above 0 within the first few thousand ticks, swords appearing, soldiers growing again), and the toolsmith must still make shovels for replacement gardeners.
+3. After the session `python tools/economy-report.py --last`: no "mines without a worker" or "iron chain dead" flag, no "toolsmith output full" flag, gardeners replaced after losses.
+
 ## r47 checks - test first (specialist room)
 
 A computer that loses its builders, diggers or gardeners can recruit them again even when its carriers are down at the reserve: the reserve leaves room for the missing specialists and the barracks waits for them.

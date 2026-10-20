@@ -6,6 +6,12 @@ The version stays **0.2.15** while updates come as numbered rounds. The mod's st
 
 ## 0.2.15 updates (October 2026)
 
+### r49: Shovels get priority when gardeners are missing (*not yet play-tested*)
+- If a computer's toolsmith is full of tools nobody takes while it needs shovels for new gardeners, it now throws one of the surplus tools away and makes the shovel.
+
+### r48: Computer mines get their pickaxes again (*not yet play-tested*)
+- The r46 toolsmith fix cut the AI's pickaxe batch short, so its iron mines could stay without workers and the whole iron chain stopped. Tool orders now run until the toolsmith's output is nearly full.
+
 ### r47: Computers can rebuild their workforce (*not yet play-tested*)
 - When a computer loses its builders, diggers or gardeners, its carrier reserve now makes room for new ones (and the barracks waits), so it no longer freezes with idle carriers and open building sites.
 

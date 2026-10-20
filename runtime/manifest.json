@@ -6,8 +6,8 @@
   "game_large_address_aware": true,
   "api_version": "2.3",
   "files": {
-    "DarkTribe-0.2.15.dll": "dc9cd1693a9344f2e902a4641bc15289490c0260533b51211ad04e74c5fa7b73",
-    "inject.exe": "2c8d5d3384318e4b7fc89ca114cb9607936acd3a3467e7a707d9983ed06c0699",
+    "DarkTribe-0.2.15.dll": "39c5324ea71911b761ba7a814228804bb13d686907172687817e01055998b381",
+    "inject.exe": "e6d60ccb8b731dcf5b3f7f4e21b26f1b6b2ed3e25b19ace8786427441c3ffa10",
     "S4ModApi.dll": "73482077644fd1fa8eadfaf9fa4d0ad2799f381713a3204988493e8261b26651"
   },
   "offline_tests": "passed",
