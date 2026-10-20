@@ -1,5 +1,11 @@
 # Experiment journal
 
+## Round r44: economy telemetry (2026-10-20, still 0.2.15)
+
+- User request: log what happens in the computer economies all the time so issues can be analysed later.
+- Implementation (research/ECONOMY_TELEMETRY_0215.md): every `dtledger::EcoEvery` 500 ticks each active computer gets one row in `evidence/v02-economy.csv` (ms and pid as in the runtime log): population and settlers per type from the engine's Statistics counters, completed buildings per type from the per-player table and sites from the building lists, housing value (0xDF730), home-economy carriers/busy/reserve and the r43 keep, and the free stock of 22 goods. Pure formatting in `native/economy-telemetry.hpp` (tested in offence-tests `ledgerRows`), reads in the bridge `ledger()`, writer `ledgerWrite` in dark-tribe.cpp. `tools/economy-report.py` summarises the file per process, map and computer and flags drains, stalled construction, missing builders/smiths, starved weapon chains and flat population.
+- Status: built, model-tested and staged with the full offline workflow on 2026-10-20 (all steps passed); not yet play-tested. Startup marker: `...; scaling carrier reserve r43; economy telemetry r44`.
+
 ## Round r43: scaling carrier reserve (2026-10-20, still 0.2.15)
 
 - User report (Iron Kingdom): the computer trained so many soldiers that no carriers were left to transport or build; the user wants a reserved population that grows with the kingdom, so that more soldiers need more houses.

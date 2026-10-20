@@ -257,6 +257,19 @@ def run():
     model=(ROOT/'native/offence-model.hpp').read_text(encoding='utf-8')
     # r43: the carrier reserve floor grows with the kingdom; the hook only ever raises the AI's own value.
     assert 'constexpr int ReserveBase=15,ReservePer=2,ReserveMax=120;' in model and 'inline int carrierKeep(int buildings){return std::min(ReserveMax,ReserveBase+std::max(0,buildings)/ReservePer);}' in model and 'inline int carrierReserve(int native,int buildings){return std::max(native,carrierKeep(buildings));}' in model
+    # r44: economy telemetry: settler counts per type from the engine counters (0xF7D40 increments Statistics + 4 +
+    # 4*(p*0x44A + type) and the total at +0x110), completed buildings from the table 0x10EF624 + (p*0x53 + type)*8,
+    # sites from the per-player building lists, housing from 0xDF730(p) (types 40..42 of the table), goods from the
+    # home economy's free stock; one row per computer every EcoEvery ticks.
+    ledger=(ROOT/'native/economy-telemetry.hpp').read_text(encoding='utf-8')
+    assert 'constexpr uint32_t EcoEvery=500;' in ledger and 'constexpr int Goods[GoodCount]={22,7,32,21,10,20,34,8,5,6,38,31,18,4,25,28,9,11,24,16,12,36};' in ledger and 'settlers,ready,sites_by_type";}' in ledger
+    assert 'image+0xdabe30+(uintptr_t)p*0x1128' in bridge and 'value<int32_t>(stats+0x110)' in bridge and 'image+0x10ef624+((uintptr_t)p*0x53+t)*8' in bridge and 'image+0x10eea74+(p*0x53+t)*4' in bridge and '(image+0xdf730))(p)' in bridge and '(image+0xd4280))((void*)eco,dtledger::Goods[g])' in bridge and '&0x2000000))l.sites[t]++' in bridge
+    assert 'static void ledgerWrite(' in source and 'evidence/v02-economy.csv' in source and 't%dtledger::EcoEvery==0' in source and 'reserveSeen[p].keep),t);' in source
+    _pe=pefile.PE(str(executable),fast_load=True);_base=_pe.OPTIONAL_HEADER.ImageBase;_cs=capstone.Cs(capstone.CS_ARCH_X86,capstone.CS_MODE_32)
+    _rows=lambda rva,n:[(i.mnemonic,i.op_str) for i in _cs.disasm(_pe.get_data(rva,n),_base+rva)]
+    _r=_rows(0xf7d40,0x2a);assert ('inc',f'dword ptr [eax*4 + {hex(_base+0xdabe34)}]') in _r and ('inc',f'dword ptr [ecx + {hex(_base+0xdabf40)}]') in _r and ('imul','eax, dword ptr [ebp + 8], 0x44a') in _r
+    _r=_rows(0xdf730,0x64);assert ('mov',f'eax, dword ptr [edx + {hex(_base+0x10ef764)}]') in _r and ('imul','edx, edi, 0x298') in _r and ('ret','4') in _r
+    _r=_rows(0x136330,0x18);assert ('inc',f'dword ptr [eax*8 + {hex(_base+0x10ef624)}]') in _r
     for forbidden in ['lua','AcquireSRWLock','SendWarriors','api->','MagicIncreaseMana','SettlersAdd','0xe3a80']:assert forbidden not in bridge,forbidden
     # Destruction is the gardeners' greening; the plugin's own destroy is only the all-green fallback.
     assert 'if(!dark){' in model and 'ops.destroy(c,c.target)' in model and 'GardenerType' in bridge and 'image+0xd5100' in bridge
@@ -304,7 +317,7 @@ def run():
     assert 'read(eco+0x354,list)' in bridge and 'read(eco+0x348,counts)' in bridge and 'listEnd-list>64' in bridge and 'i<countsEnd-counts' in bridge
     assert 'inline int shovelOrder(' in model and 'ordered>=ShovelContinuous?"continuous order"' in model and 'toolsmiths<=0?"no toolsmith"' in model and 'free>ShovelReserve?"spare shovels"' in model
     assert 'offenceTools(p,t,supply,wanted);' in source and 'nativeOffence.orderShovels(tools,supply.eco,amount)' in source and 'OFFENCE_TOOLS player=%u' in source and 'toolsmiths=%d shovelOrder=%d ironbars=%d coal=%d' in source
-    assert '; toolsmith shovel orders r29; citadel fire keep-off and farm blockade r30; clean start maps r31; scaled styles and protected convoy r32; computer defence and reclaim priority r33; site selection crash fix r34; reclaimed land fog and fast army marches r35; fire pull and route diagnostics r36; relentless and smart attacks r37; walked progress and steady sieges r38; Dark Gardeners leave the Manacopter r39; Iron Kingdom toolsmith hammers r40; no Manacopter healing r41; map reveal toggle r42; scaling carrier reserve r43")' in source
+    assert '; toolsmith shovel orders r29; citadel fire keep-off and farm blockade r30; clean start maps r31; scaled styles and protected convoy r32; computer defence and reclaim priority r33; site selection crash fix r34; reclaimed land fog and fast army marches r35; fire pull and route diagnostics r36; relentless and smart attacks r37; walked progress and steady sieges r38; Dark Gardeners leave the Manacopter r39; Iron Kingdom toolsmith hammers r40; no Manacopter healing r41; map reveal toggle r42; scaling carrier reserve r43; economy telemetry r44")' in source
     # r30: one fire geometry (citadel-fire.hpp) for the director and the farm blockade; the fire is on from the native
     # ready-farm counter, the listed farms or a Farm site; every keep is Euclidean; the guard runs every director step.
     fire=(ROOT/'native/citadel-fire.hpp').read_text(encoding='utf-8')

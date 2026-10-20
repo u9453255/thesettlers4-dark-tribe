@@ -5,6 +5,7 @@
 #include "fast-memory.hpp"
 #include "map-size.hpp"
 #include "offence-model.hpp"
+#include "economy-telemetry.hpp"
 #include "footprints.hpp"
 #include "offence-signatures.hpp" // Private, generated from the pinned file.
 namespace dtoffence {
@@ -499,6 +500,24 @@ public:
   Tools k=tools(p,eco);c.toolsmiths=k.toolsmiths;c.shovelOrder=k.ordered;
   c.carriers=value<uint16_t>(eco+0x26);c.busy=value<uint16_t>(eco+0x22);c.reserve=value<uint16_t>(eco+0x20);
   return c;
+ }
+ // r44: economy telemetry, one Ledger per computer (research/ECONOMY_TELEMETRY_0215.md). Settler counts per type are
+ // the engine's own counters Statistics 0xDABE30 + p*0x1128 + 4 + 4*type (0xF7D40 increments, 0xF7DB0 decrements;
+ // +0x110 the total); completed buildings per type are the table 0x10EF624 + (p*0x53 + type)*8 (0x1362F0 on
+ // completion); sites are the entities of the per-player building lists [0x10EEA74 + (p*0x53 + type)*4] without the
+ // ready flag 0x2000000; housing is 0xDF730(p) (completed residences times their settlers plus the start settlers);
+ // goods are the home economy's free stock (0xD4280) and carriers its +0x26/+0x22/+0x20. Without a home (x, y < 0)
+ // the economy part stays 0 with eco false.
+ dtledger::Ledger ledger(uint8_t p,int x,int y,int keep)const{
+  dtledger::Ledger l;l.player=p;l.keep=keep;if(p<1||p>8)return l;
+  uintptr_t stats=image+0xdabe30+(uintptr_t)p*0x1128;l.population=value<int32_t>(stats+0x110);
+  for(int t=0;t<dtledger::SettlerTypes;t++){int c=value<int32_t>(stats+4+4*t);l.settlers[t]=c>0&&c<100000?c:0;}
+  for(int t=0;t<dtledger::BuildingTypes;t++){int c=value<int32_t>(image+0x10ef624+((uintptr_t)p*0x53+t)*8);l.ready[t]=c>0&&c<10000?c:0;uint32_t head=0;if(!read(image+0x10eea74+(p*0x53+t)*4,head))continue;uint16_t id=(uint16_t)head;for(int guard=0;id&&guard<512;guard++){uintptr_t e=entity(id);if(!e)break;if(value<BYTE>(e+10)==8&&!(value<uint32_t>(e+0x14)&0x2000000))l.sites[t]++;id=value<uint16_t>(e+0x2a);}}
+  l.housing=((int(__stdcall*)(int))(image+0xdf730))(p);
+  uintptr_t eco=x>=0&&y>=0?economy(p,x,y):0;if(!eco)return l;l.eco=true;
+  for(int g=0;g<dtledger::GoodCount;g++)l.goods[g]=((int(__thiscall*)(void*,int))(image+0xd4280))((void*)eco,dtledger::Goods[g]);
+  l.carriers=value<uint16_t>(eco+0x26);l.busy=value<uint16_t>(eco+0x22);l.reserve=value<uint16_t>(eco+0x20);dtmem::invalidate();
+  return l;
  }
  // r33: free stock of one good in an economy (0xD4280, as census() reads it), -1 without an economy.
  int stock(uintptr_t eco,int good)const{if(!eco)return -1;int n=((int(__thiscall*)(void*,int))(image+0xd4280))((void*)eco,good);dtmem::invalidate();return n;}

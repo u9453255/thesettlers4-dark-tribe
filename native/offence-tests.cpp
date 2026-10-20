@@ -1,4 +1,6 @@
 #include "offence-model.hpp"
+#include "economy-telemetry.hpp"
+#include <cstring>
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -1238,4 +1240,14 @@ static void carrierReserveFloor(){
  assert(carrierReserve(5,50)==40&&carrierReserve(52,50)==52&&carrierReserve(5,0)==15&&carrierReserve(80,400)==120&&carrierReserve(0,0)==ReserveBase);
  for(int b=0;b<500;b++)assert(carrierKeep(b+1)>=carrierKeep(b)&&carrierKeep(b)>=ReserveBase&&carrierKeep(b)<=ReserveMax&&carrierReserve(b,b)>=b);
 }
-int main(){toolsmithShovels();basics();targetOrder();geometry();gating();styles();allied();campaign();reattack();fallback();defence();gardenerLosses();farmReturns();steering();sweeping();hunting();reclaiming();landFirst();marchBudget();losses();adoption();timeouts();detours();reviewFixes();fireRules();guarding();guardReview();keepAudit();soak();soakTwo();scaling();convoyRules();convoyField();convoySoak();defending();reclaimRegression();unreachable();reviewR33();defenceSoak();carrierReserveFloor();puts("PASS: offence-tests");return 0;}
+// r44: the economy ledger row matches the header column by column and survives a short buffer.
+static void ledgerRows(){
+ dtledger::Ledger l;l.player=3;l.eco=true;l.population=250;l.carriers=60;l.busy=12;l.reserve=45;l.keep=45;l.housing=300;l.settlers[1]=60;l.settlers[2]=5;l.settlers[3]=8;l.settlers[29]=20;l.settlers[44]=2;l.settlers[50]=4;l.settlers[61]=1;l.ready[40]=3;l.ready[41]=2;l.ready[24]=1;l.ready[21]=1;l.sites[41]=1;l.sites[22]=1;for(int g=0;g<dtledger::GoodCount;g++)l.goods[g]=g;
+ auto commas=[](const char*s){int n=0;for(;*s;s++)n+=*s==',';return n;};
+ char row[2600];int w=dtledger::csvRow(l,123,45,500,row,sizeof(row));assert(w>0&&(size_t)w<sizeof(row)&&commas(dtledger::csvHeader())==52&&commas(row)==52);
+ assert(!strcmp(row,"123,45,500,3,1,250,60,12,48,45,45,300,3,2,0,7,2,1,1,0,0,0,0,23,2,8,5,4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,1:60 2:5 3:8 29:20 44:2 50:4 61:1,21:1 24:1 40:3 41:2,22:1 41:1"));
+ dtledger::Ledger z;w=dtledger::csvRow(z,1,2,3,row,sizeof(row));assert(w>0&&commas(row)==52&&!strcmp(row+w-3,",,,")&&dtledger::soldiers(z)==0);
+ char tiny[16];w=dtledger::csvRow(l,123,45,500,tiny,sizeof(tiny));assert(w>=(int)sizeof(tiny)&&tiny[15]==0&&commas(tiny)<52);
+ for(int t=0;t<dtledger::SettlerTypes;t++)l.settlers[t]=99999;char big[64];dtledger::list(big,sizeof(big),l.settlers,dtledger::SettlerTypes);assert(big[63]==0&&strlen(big)<64);
+}
+int main(){toolsmithShovels();basics();targetOrder();geometry();gating();styles();allied();campaign();reattack();fallback();defence();gardenerLosses();farmReturns();steering();sweeping();hunting();reclaiming();landFirst();marchBudget();losses();adoption();timeouts();detours();reviewFixes();fireRules();guarding();guardReview();keepAudit();soak();soakTwo();scaling();convoyRules();convoyField();convoySoak();defending();reclaimRegression();unreachable();reviewR33();defenceSoak();carrierReserveFloor();ledgerRows();puts("PASS: offence-tests");return 0;}

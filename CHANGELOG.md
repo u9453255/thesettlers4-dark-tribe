@@ -6,6 +6,9 @@ The version stays **0.2.15** while updates come as numbered rounds. The mod's st
 
 ## 0.2.15 updates (October 2026)
 
+### r44: Economy log for computer players (*developer feature*)
+- The computers' economies are recorded every few seconds to `evidence/v02-economy.csv`, so problems like the soldier drain can be found from a play session instead of guessed.
+
 ### r43: Computers keep a working population (*not yet play-tested*)
 - A computer player no longer turns its last carriers into soldiers. It keeps a pool of free settlers that grows with its town (15 plus one per two buildings), so transport and construction go on, and new soldiers come from new houses.
 

@@ -10,6 +10,16 @@ All in-game testing belongs to you. Offline checks cover code, pinned files, dis
 4. Start a NEW `00_Dark_Tribe_First_Dawn` custom map, player 1 human Dark and player 2 computer Viking. Keep races unchanged. Use a client height of at least 600 pixels.
 5. Observe at least two minutes before other tests: no crash or early victory/defeat. If an ending occurs, record its actual text/winner; sound alone is insufficient. Existing saves retain their old terrain, AI and bank and cannot validate the new scenario economy.
 
+## r44 checks - test first (economy telemetry)
+
+Every computer writes one row per 500 ticks to `evidence/v02-economy.csv` (population, carriers busy/idle/reserve/keep, housing, buildings and sites by type, soldiers, goods). `python tools/economy-report.py` summarises it and flags drains, stalled construction, starved smiths and flat population.
+
+**built, model-tested and staged with the full offline workflow on 2026-10-20 (all steps passed); not yet play-tested.** Until the startup line ends with `economy telemetry r44`, you are still running r43 or older.
+
+1. Start with `Launch Dark Tribe.cmd`. After **Dark Tribe 0.2.15 ready**, the startup line in `evidence/v02-runtime.log` ends with `scaling carrier reserve r43; economy telemetry r44`, and a line `Computer economy telemetry every 500 ticks to evidence/v02-economy.csv` follows.
+2. Play any scenario for a while. `evidence/v02-economy.csv` must exist and grow (one header line, then rows), and the game must not stutter every 500 ticks.
+3. After the session run `python tools/economy-report.py` (or tell me to read it): it lists every computer of every map with population, carriers, soldiers, buildings and the flagged issues. The r43 check is in the same output: `reserve` must not be below `keep`, and carriers must not drain to 5.
+
 ## r43 checks - test first (scaling carrier reserve)
 
 A computer keeps a pool of free carriers that grows with its town (15 plus one per two completed buildings, at most 120); its barracks turn only carriers above that pool into soldiers, so new soldiers need new houses.
