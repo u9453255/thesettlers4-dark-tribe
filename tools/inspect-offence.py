@@ -265,7 +265,7 @@ def run():
     ledger=(ROOT/'native/economy-telemetry.hpp').read_text(encoding='utf-8')
     assert 'constexpr uint32_t EcoEvery=500;' in ledger and 'constexpr int Goods[GoodCount]={22,7,32,21,10,20,34,8,5,6,38,31,18,4,25,28,9,11,24,16,12,36};' in ledger and 'settlers,ready,sites_by_type";}' in ledger
     assert 'image+0xdabe30+(uintptr_t)p*0x1128' in bridge and 'value<int32_t>(stats+0x110)' in bridge and 'image+0x10ef624+((uintptr_t)p*0x53+t)*8' in bridge and 'image+0x10eea74+(p*0x53+t)*4' in bridge and '(image+0xdf730))(p)' in bridge and '(image+0xd4280))((void*)eco,dtledger::Goods[g])' in bridge and '&0x2000000))l.sites[t]++' in bridge
-    assert 'static void ledgerWrite(' in source and 'evidence/v02-economy.csv' in source and 't%dtledger::EcoEvery==0' in source and 'reserveSeen[p].keep),t);' in source
+    assert 'static void ledgerWrite(' in source and 'evidence/v02-economy.csv' in source and 't%dtledger::EcoEvery==0' in source and 'reserveSeen[p].keep);row.room=reserveSeen[p].room;ledgerWrite(row,t);' in source
     _pe=pefile.PE(str(executable),fast_load=True);_base=_pe.OPTIONAL_HEADER.ImageBase;_cs=capstone.Cs(capstone.CS_ARCH_X86,capstone.CS_MODE_32)
     _rows=lambda rva,n:[(i.mnemonic,i.op_str) for i in _cs.disasm(_pe.get_data(rva,n),_base+rva)]
     _r=_rows(0xf7d40,0x2a);assert ('inc',f'dword ptr [eax*4 + {hex(_base+0xdabe34)}]') in _r and ('inc',f'dword ptr [ecx + {hex(_base+0xdabf40)}]') in _r and ('imul','eax, dword ptr [ebp + 8], 0x44a') in _r
@@ -302,8 +302,50 @@ def run():
     _r=_rows(0x16f8d0,0x58);assert ('movzx','eax, byte ptr [esi + 0x42]') in _r and ('mov','bl, byte ptr [esi + 0x41]') in _r and ('sub','edx, eax') in _r and ('cmovg','ecx, edx') in _r and ('mov','byte ptr [esi + 0x41], bl') in _r and ('call',hex(_base+0x16fe80)) in _r and ('call','dword ptr [eax + 0xc]') in _r and ('mov','byte ptr [esi + 0x42], 0') in _r and ('call','dword ptr [eax + 0x10]') in _r and ('ret','4') in _r
     assert ('movzx','eax, word ptr [edi + ebx*2 + 0x290]') in _rows(0x16fe80,0x70) and pe.get_data(0xc5a7bc+0x28,4)==(_base+0x1700e0).to_bytes(4,'little')
     assert 'int dropFromPile(uint16_t id){uintptr_t pile=entity(id);if(!pile||value<uintptr_t>(pile)!=image+0xc5a7bc)return -1;' in bridge and '((void(__thiscall*)(void*,int))(image+0x16f8d0))((void*)pile,1);dtmem::invalidate();' in bridge and 't.id=value<uint16_t>(q);' in bridge
-    assert 'constexpr int DropAt=7;constexpr uint32_t DropEvery=250;' in model and 'if(out[i].good==31&&out[i].count-out[i].reserved>0)return -1;' in model
+    assert 'constexpr int DropAt=7,DropKeep=2;constexpr uint32_t DropEvery=250;' in model and 'if(out[i].good!=31&&out[i].count>=DropKeep&&free>most){most=free;best=i;}' in model
+    assert 'out[i].good==31&&out[i].count-out[i].reserved>0' not in model  # r50: a free shovel lying in the output no longer stops the drop
     assert 'int i=dtoffence::dropCandidate(k.out,k.outs,k.outSum);' in source and 'nativeOffence.dropFromPile(k.out[i].id)' in source and 'OFFENCE_TOOL_DROP' in source and 'shovelsOwed[p]=amount>0||' in source
+    # r50 (research/R50_PLAN_0215.md, AI_OFFENCE_0215.md Round r50): one spare shovel and batches of six; drops never empty a
+    # pile; a winning land-only defence goes on; a fast rise skips the attacks-first gap; few far units do not pull a defence
+    # off the land being lost; attacks leave a home guard of gardeners; diagnostics for units hidden by the fire keep and for
+    # gardeners far from home; the specialist room in the telemetry.
+    for text in ['constexpr int GardenersWanted=12,ShovelReserve=1;','constexpr int ShovelBatch=6,ShovelContinuous=100;',
+                 'constexpr uint32_t LandDefendStep=1500;constexpr int LandDefendGain=40;','constexpr int DefendFar=60,DefendFew=3;','constexpr uint32_t FireDropNote=1000;','constexpr int HomeGuard=4;',
+                 'template<class Ops> bool extend(Campaign&c,uint32_t t,Ops&ops,const Fire&f,const std::vector<Soldier>&m){','if(gain<LandDefendGain&&!units&&!walking)return false;',
+                 'c.landStep=std::min(DefendTime,limit+LandDefendStep);c.landOwnAt=in.own;','c.style==Style::Defend?defendBudget(c):CampaignTimeout)&&!extend(c,t,ops,f,m)',
+                 'c.landStep=LandDefendTime;c.landOwnAt=th.own;c.beyondFire=false;','if(!(th.serious&&th.rise>=SeriousRise)){defendNote(c,t,ops,th,"deferred: attacks first");return false;}rush=true;',
+                 'c.reason=rush?"start: serious rise":th.serious?"start: serious intrusion":"start: intrusion";',
+                 'if(aim&&th.land&&(in.rise>0||in.own>=SeriousCells)&&!close&&n<DefendFew){','Threat th=assess(c,ops,f,s,all,false);fireNote(c,t,ops,th); /* r50; a recall answers the Dark fighters','if(in.ownX>=0&&ops.ownDark(c,in.ownX,in.ownY,OwnRadius,keep,qx,qy)&&ops.reach(c,qx,qy)){gx=qx;gy=qy;}',
+                 'th.landX=gx;th.landY=gy;if(distance(th.x,th.y,gx,gy)>DefendFar){th.x=gx;th.y=gy;th.landAim=true;}',
+                 'else dropped(th.drop,f,p,true);','else dropped(th.drop,f,p,false);','template<class Ops> void fireNote(Campaign&c,uint32_t t,Ops&ops,const Threat&th){','ops.report(Event::DefendFire,note);',
+                 'inline bool across(int ax,int ay,int bx,int by,const Fire&f){','c.beyondFire=across(a.x,a.y,hx,hy,f);startReturn(c,t,ops,m,"no way outside the fire defence");',
+                 'c.beyondFire=across(a.x,a.y,c.stageX,c.stageY,f);startReturn(c,t,ops,m,"no way outside the fire defence");','c.beyondFire=across(a.x,a.y,c.target.doorX,c.target.doorY,f);startReturn(',
+                 'inline int guardedWant(int want,bool guard){return guard?std::max(std::min(want,MinGardeners),want-HomeGuard):want;}',
+                 'Intrusion in;ops.intrusion(c,in);if(in.own<=0||(in.rise<=0&&in.own<SeriousCells))return false;','return ops.ownDark(c,s.homeX,s.homeY,LaunchReach,keep,dx,dy);',
+                 'bool homeGuarded=gfree>=MinGardeners&&homeGuard(c,ops,s,all,f);','return guardedWant(std::min(cap,gardenersFor(st,take)),homeGuarded);};',
+                 'assign(c,ops,s.homeX,s.homeY,homeGuarded?std::min(pick.want,std::max(MinGardeners,gfree-HomeGuard)):pick.want,t,mustering);',
+                 'struct Intrusion {int own=0,rise=0;int ownX=-1,ownY=-1;','uint16_t job=0;};']:assert text in model,text
+    # r50: no recall for Dark Gardeners or a rise (r37 stays: only Dark fighters recall an attack).
+    assert model.count('if(!th.fighters)return false; /* r37')==1 and 'th.gardeners>=SeriousGardeners)return true' not in model
+    for text in ['in.ownX=(int)(sx/sum);in.ownY=(int)(sy/sum);','g.job=job; /* r50']:assert text in bridge,text
+    for text in ['OFFENCE_DEFEND_FIRE player=%u sector=%u phase=%d dropped=%d fighters=%d gardeners=%d nearest=%.1f centre=%d,%d outer=%.1f at=%d,%d units=%d own=%d rise=%d area=%d,%d threat=%s',
+                 'static int offenceFarGardeners(uint8_t p,uint32_t t,const dtoffence::Strength&home){','OFFENCE_GARDENER_FAR player=%u id=%u at=%d,%d job=0x%x work=%d esc=%d distance=%d homeRegion=%d held=%s',
+                 'int distant=offenceFarGardeners(p,t,home);','shovels=%d far=%d ordered=%u','carriers=%u far=%d reason=%s','memset(offenceFarNote,0,sizeof(offenceFarNote));']:assert text in source,text
+    assert 'tsworker,room,settlers,ready,sites_by_type";}' in ledger and 'tsworker=-1,room=-1;' in ledger and 'w+=snprintf(out+w,n-w,",%d",l.room);' in ledger
+    assert ledger.index('l.room);')<ledger.index('",%s,%s,%s",s,r,b')  # appended before the three list columns
+    # r50: economy-report.py reads the room (-1 in older files) and flags a reserve below the keep only when it is also below
+    # carriers - room (a synthetic file: room 4 with the reserve at carriers - room is no failure; room 0 below the keep is).
+    import importlib.util
+    _spec=importlib.util.spec_from_file_location('economy_report',ROOT/'tools/economy-report.py');_report=importlib.util.module_from_spec(_spec);_spec.loader.exec_module(_report)
+    assert 'room' in _report.OPTIONAL
+    def _sample(tick,reserve,keep,carriers,room):
+        row={key:0 for key in _report.FIXED};row.update(tick=tick,eco=1,reserve=reserve,keep=keep,carriers=carriers,busy=0,idle=carriers,population=200,toolsmiths=0,tsout=-1,tsin=-1,tsworker=-1,room=room)
+        row.update(settlers_by_type={},ready_by_type={},sites_by_type={});return row
+    _flag=lambda samples:[f for f in _report.analyse(samples)[0] if f.startswith('reserve below keep')]
+    assert not _flag([_sample(500*i,36,40,40,4) for i in range(1,8)])  # deliberate room: reserve = carriers - room below the keep
+    assert _flag([_sample(500*i,30,40,60,0) for i in range(1,8)])  # no room: a reserve below the keep is a failed floor
+    assert _flag([_sample(500*i,30,40,60,4) for i in range(1,8)])  # room 4 but the reserve below carriers - room too
+    assert _flag([_sample(500*i,30,40,60,-1) for i in range(1,8)])  # an older file without the column: the r44 rule
     assert 'static void offenceToolWatch(uint8_t p,uint32_t t){' in source and 'OFFENCE_TOOL_SURPLUS' in source and 'OFFENCE_TOOLSMITH' in source and '{offenceShovelGuard(p,t);offenceToolWatch(p,t);}' in source and 'l.tsout=k.outSum;l.tsin=k.inMin;l.tsworker=k.worker;' in bridge
     for forbidden in ['lua','AcquireSRWLock','SendWarriors','api->','MagicIncreaseMana','SettlersAdd','0xe3a80']:assert forbidden not in bridge,forbidden
     # Destruction is the gardeners' greening; the plugin's own destroy is only the all-green fallback.
@@ -352,7 +394,7 @@ def run():
     assert 'read(eco+0x354,list)' in bridge and 'read(eco+0x348,counts)' in bridge and 'listEnd-list>64' in bridge and 'i<countsEnd-counts' in bridge
     assert 'inline int shovelOrder(' in model and 'ordered>=ShovelContinuous?"continuous order"' in model and 'toolsmiths<=0?"no toolsmith"' in model and 'free>ShovelReserve?"spare shovels"' in model
     assert 'offenceTools(p,t,supply,wanted);' in source and 'nativeOffence.orderShovels(tools,supply.eco,amount)' in source and 'OFFENCE_TOOLS player=%u' in source and 'toolsmiths=%d shovelOrder=%d ironbars=%d coal=%d' in source
-    assert '; toolsmith shovel orders r29; citadel fire keep-off and farm blockade r30; clean start maps r31; scaled styles and protected convoy r32; computer defence and reclaim priority r33; site selection crash fix r34; reclaimed land fog and fast army marches r35; fire pull and route diagnostics r36; relentless and smart attacks r37; walked progress and steady sieges r38; Dark Gardeners leave the Manacopter r39; Iron Kingdom toolsmith hammers r40; no Manacopter healing r41; map reveal toggle r42; scaling carrier reserve r43; economy telemetry r44; economy-only keep and Iron Kingdom stone r45; toolsmith output watch r46; specialist room r47; tool orders until the output fills r48; shovel priority drop r49")' in source
+    assert '; toolsmith shovel orders r29; citadel fire keep-off and farm blockade r30; clean start maps r31; scaled styles and protected convoy r32; computer defence and reclaim priority r33; site selection crash fix r34; reclaimed land fog and fast army marches r35; fire pull and route diagnostics r36; relentless and smart attacks r37; walked progress and steady sieges r38; Dark Gardeners leave the Manacopter r39; Iron Kingdom toolsmith hammers r40; no Manacopter healing r41; map reveal toggle r42; scaling carrier reserve r43; economy telemetry r44; economy-only keep and Iron Kingdom stone r45; toolsmith output watch r46; specialist room r47; tool orders until the output fills r48; shovel priority drop r49; gardener supply and land defence r50")' in source
     # r30: one fire geometry (citadel-fire.hpp) for the director and the farm blockade; the fire is on from the native
     # ready-farm counter, the listed farms or a Farm site; every keep is Euclidean; the guard runs every director step.
     fire=(ROOT/'native/citadel-fire.hpp').read_text(encoding='utf-8')
@@ -369,7 +411,7 @@ def run():
     assert 'send(c,t,ops,m,s.homeX,s.homeY,true)' not in model and 'GuardResend)){c.fireAt' not in model
     assert 'image+0x10ef7ac+DarkPlayer*0x298' in bridge and '(job==0xae||job==0xaf)?rx:-1' in bridge and 'g.reservedX=job==0xaf?rx:-1' in bridge and '!accept(px,py)' in bridge and '(flags(x,y)&0x05)==0x04' in bridge
     assert 'static void offenceFire(OffenceOps&ops,uint32_t t){' in source and 'offenceFire(ops,t);' in source and 'OFFENCE_FIRE_STATE ready=%d listed=%d farmSites=%d on=%u centres=' in source and 'OFFENCE_FIRE_NATIVE player=%u soldiers=%d' in source and 'OFFENCE_FIRE player=%u' in source
-    assert 'int readyFarms(){return nativeOffence.readyFarms();}' in source and 's.kind=state.construction[i].kind;' in source and '!dtoffence::inFire(px,py,f)' in source and '"CALL","FIRE","CONVOY","DEFEND"}' in source
+    assert 'int readyFarms(){return nativeOffence.readyFarms();}' in source and 's.kind=state.construction[i].kind;' in source and '!dtoffence::inFire(px,py,f)' in source and '"CALL","FIRE","CONVOY","DEFEND","DEFEND_FIRE"}' in source
     assert 'offenceFireNote[0]=0;' in source and 'random' not in fire
     # r29 review: the AI's clears are watched every tick; the watch is transient and puts back only the plugin's part.
     assert 'struct ShovelWatch {int owed=0,seen=-1;};' in model and 'if(now+1<w.seen)add=std::max(0,std::min(w.owed,w.seen)-now);' in model and 'inline void shovelNoted(' in model and 'inline int shovelTarget(' in model
@@ -411,7 +453,7 @@ def run():
                  'detour=0,path=0;bool reachable=false;};','return b.reachable&&b.path>=0&&!(c&&avoided(*c,b.uid,t));','long score=(b.path>0?(long)b.path:distance(fromX,fromY,b.doorX,b.doorY)+std::max(0,b.detour))',
                  'constexpr int ClusterRadius=40,ClusterBonus=8,ClusterMax=24;','ops.paths(c,s.homeX,s.homeY,all);','ops.paths(c,a.x,a.y,all);','if(!allied&&army<AssaultMin&&c.random.bits16()>=c.chance){decline(c,t,ops,"chance");return;}',
                  'constexpr uint32_t LandDefendGap=12000,LandDefendTime=3000;','template<class Ops> bool attackable(','defendNote(c,t,ops,th,"deferred: attacks first");return false;','int take=landOnly?std::max(1,std::min(army,escortSize(army))):defendSize(free,army,th);',
-                 'if(!th.fighters)return false; /* r37','(c.landOnly?LandDefendTime:DefendTime)','CallHome=4;constexpr uint32_t CallHomeEvery=600;','note.reason="gardeners called home";ops.report(Event::Reclaim,note);',
+                 'if(!th.fighters)return false; /* r37','inline uint32_t defendBudget(const Campaign&c){return c.landOnly?std::min(DefendTime,std::max(LandDefendTime,c.landStep)):DefendTime;}','CallHome=4;constexpr uint32_t CallHomeEvery=600;','note.reason="gardeners called home";ops.report(Event::Reclaim,note);',
                  'h.weight=any>=0?1:2+','w.weight=any<0?5:1;']:assert text in model,text
     for gone in ['bool late=t-c.since>MarchTimeout','startReturn(c,t,ops,m,"target not reached")','LongAvoid=4*LostAvoid']:assert gone not in model,gone
     for text in ['void walkAll(int fx,int fy,int wanted,int limit,std::vector<Target>&out){','if(goalSeen[at]==goalStamp){Target&t=out[goalOf[at]];if(t.path<0){t.path=std::max(1,steps);found++;}}']:assert text in bridge,text
@@ -446,7 +488,7 @@ def run():
                  'inline bool tooLong(int path,int hex){return path<0||path>detourLimit(hex);}','std::max(0,b.detour)','inline void failed(Campaign&c,uint32_t uid,uint32_t t){','++c.ignoredOrders>=IgnoreLimit','"orders not executed"',
                  'if(t-c.targetSince>targetBudget(c.targetHex)){failed(c,c.target.uid,t);','inline int shovelRestoreWhile(ShovelWatch&w,int now,int iron){']:assert text in model,text
     assert 'inside(p,x,y))(type==52?in.gardeners:in.fighters).push_back({x,y});' in bridge and 'int walk(int fx,int fy,int tx,int ty,int wanted,int limit){' in bridge and 'if(path<0||(path>0&&tooLong(path,hex)))t.reachable=false;' in bridge and 'rise[p]=scanned?now-was:0;' in bridge
-    assert 'OFFENCE_DEFEND player=%u sector=%u phase=%d army=%u gardeners=%d units=%d fighters=%d own=%d rise=%d area=%d,%d reason=%s' in source and 'nativeOffence.intrusion(c.player,region,in);' in source and 'dtoffence::shovelRestoreWhile(watch,before,offenceIron[p])' in source and 'offenceIron[p]=nativeOffence.stock(supply.eco,20);' in source
+    assert 'OFFENCE_DEFEND player=%u sector=%u phase=%d army=%u gardeners=%d units=%d fighters=%d own=%d rise=%d area=%d,%d landAt=%d,%d beyondFire=%d reason=%s' in source and 'nativeOffence.intrusion(c.player,region,in);' in source and 'dtoffence::shovelRestoreWhile(watch,before,offenceIron[p])' in source and 'offenceIron[p]=nativeOffence.stock(supply.eco,20);' in source
     assert 'nativeOffence.targets(region,out,homeX,homeY,now);' in source and source.count('ops.homeX=st.homeX;ops.homeY=st.homeY;ops.now=t;')==2
     # r33 review: free gardeners never reclaim alone across the map, land-only defences need gardeners and adopt those near
     # the army, hold() danger skips fighters in the fire field like assess(), 'serious' land needs a reclaimable cell, a
@@ -466,8 +508,8 @@ def run():
         native_damage_paths_for_dark_buildings='none (soldiers, war machines, axe warriors/saboteurs, spells); gardener greening and 0x136A80 only',
         mod_squad='0x45020(manager, 6) + Command(0) + AddMember from the sector reservoirs/guard squads; dissolve 0x3FA50 + slot 2',
         destroy='gardeners (type 50) green the ring of walkable footprint cells; native collapse 0xCBB60 -> 0x13CE10 -> 0x136A80(building, gardener owner); 0x136A80 called by the plugin only when the ring is all green and the building still stands',
-        gardeners='authored at map start; native recruitment 0xD5100 (carrier + shovel) one at a time, keeping 2 shovels',
-        shovels='r29: while gardeners are missing and free shovels are at the reserve, the home economy shovel order (byte eco+0x348 at the index of good 31 in eco+0x354) is topped up to at most 4 via 0xD6A90 (the 0x13A9 toolsmith handler), only with a ready toolsmith (type 0x15, CProductionBuildingRole) in that economy, never on a continuous 100 order; the toolsmith (0x14D008) makes nothing without an order; the AI never orders shovels for gardeners (0x249835 only for its diggers) and its building manager can clear or lower the order (0x249770 sends 10-2*diggers: 0 at its 5-digger steady state, negative above), so the plugin watches the byte every tick and puts back its own part after a drop of two or more (transient watch, before the net dispatch and the entity update)',
+        gardeners='authored at map start; native recruitment 0xD5100 (carrier + shovel) one at a time, keeping 1 shovel (r50; 2 before)',
+        shovels='r29: while gardeners are missing and free shovels are at the reserve, the home economy shovel order (byte eco+0x348 at the index of good 31 in eco+0x354) is topped up to at most 6 (r50; 4 before) via 0xD6A90 (the 0x13A9 toolsmith handler), only with a ready toolsmith (type 0x15, CProductionBuildingRole) in that economy, never on a continuous 100 order; the toolsmith (0x14D008) makes nothing without an order; the AI never orders shovels for gardeners (0x249835 only for its diggers) and its building manager can clear or lower the order (0x249770 sends 10-2*diggers: 0 at its 5-digger steady state, negative above), so the plugin watches the byte every tick and puts back its own part after a drop of two or more (transient watch, before the net dispatch and the entity update)',
         citadel_fire='r30: CDarkTempleRole (Temple 50, Fortress 51; the Manacopter Hall has none) runs 0x1458C0 every 31 ticks per building: while the owner\'s ready-farm counter [0x10EF7AC + p*0x298] > 0 it kills (255 damage, 100% from 4 farms) hostile units with a selection group on walkable Dark cells (flags & 5 == 4) of the door\'s land sector within the Euclidean disc dx*dx - dx*dy + dy*dy <= R*R around position + (1,2), R = 16+2n or 24 (spiral 0xD69968, 2,083 cells for R = 24, up to 27 hex steps). The director keeps every computer unit outside FireLine 27 while the counter, the listed farms or a Farm site say the fire is on: soldier destinations soldierKeep(N) = 27 + formation spread, gardener cells 28, legs routed, farms within 33 and Halls within 44 never targeted, a guard every 10 ticks pulls units out (gardener aim cell role +0x40/+0x44 under job 0xAE/0xAF)',
         timing='r37: first attack after AttackDelay*840/3 within 2..4 minutes (native agent 0x2FAF0 uses AttackDelay*840), checks every 128..255 ticks, no chance gate for an army of AssaultMin+ (smaller: 50% +25% per failure), 150..449 ticks rest after a campaign, leg and target budgets by distance (TicksPerHex 25, NoProgress 1500), failed targets replaced from where the army stands; targets by the walking path from the chooser (walkAll) with a cluster bonus',
         styles='raid, assault, pincer, sweep, hunt, allied (plugin generator, never the game LCG 0xE66B10); r32: raid max(10, army/3), hunt max(16, army/2), sweep escort max(8, army/4), each at most the army, assault/pincer/allied the whole army; gardeners base (raid 4, hunt 2, sweep 10, allied 6, assault/pincer 8) + soldiers taken/15, at most gardenersWanted(free soldiers) = min(20, 12 + max(0, soldiers-40)/10)',
@@ -477,6 +519,6 @@ def run():
         checked_instructions=len(WHY)+len(USED)+len(TOOLS)+len(FIRE)+len(WATCH)+len(DEFEND),generated_signature_regions=len(PINS),relocation_data_copy_bases=['0x400000','0x360000','0x60000000'],
         gameplay_attack_verified=False,gameplay_greening_verified=False,gameplay_recruitment_verified=False,gameplay_toolsmith_orders_verified=False,dark_land_region_verified=False)
     (ROOT/'research/offence-native-checks.json').write_text(json.dumps(report,indent=2))
-    print('PASS: offence target filters, mod squad lifecycle, gardener orders/greening/recruitment, toolsmith shovel orders (r29), citadel fire keep-off (r30), scaled styles and convoy (r32), parked convoy gardeners, defence and reclaim priority (r33), AI config/strength layout and relocation-aware pins; file/data-only checks')
+    print('PASS: offence target filters, mod squad lifecycle, gardener orders/greening/recruitment, toolsmith shovel orders (r29), citadel fire keep-off (r30), scaled styles and convoy (r32), parked convoy gardeners, defence and reclaim priority (r33), gardener supply and land defence (r50), AI config/strength layout and relocation-aware pins; file/data-only checks')
 
 if __name__=='__main__':run()

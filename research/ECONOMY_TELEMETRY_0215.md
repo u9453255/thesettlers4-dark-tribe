@@ -22,6 +22,7 @@ Columns (`native/economy-telemetry.hpp`, `csvHeader`/`csvRow`; the `ledgerRows` 
 | `soldiers,leaders,builders,diggers,gardeners` | settler counts per type from Statistics + 4 + 4*type: 29..44 and 61..63, 44, 3, 2, 50 |
 | 22 goods `log..water` | free stock of the home economy, 0xD4280(eco, good) for the S4ModApi ids in `dtledger::Goods` (LOG 22, BOARD 7, STONE 32, IRONORE 21, COAL 10, IRONBAR 20, SWORD 34, BOW 8, BATTLEAXE 5, BLOWGUN 6, BACKPACKCATAPULT 38, SHOVEL 31, HAMMER 18, AXE 4, PICKAXE 25, SAW 28, BREAD 9, FISH 11, MEAT 24, GRAIN 16, FLOUR 12, WATER 36) |
 | `tsout,tsin,tsworker` | r46: the home economy's first ready toolsmith: output piles total (capacity 8), lowest input pile count, worker byte; -1 without one |
+| `room` | r50: the r47 specialist room the reserve hook last applied (`reserveSeen[p].room`): while builders, diggers or gardeners are missing the reserve is at most carriers - room; 0 without a shortage (also before the hook first ran), -1 in files older than r50 |
 | `settlers,ready,sites_by_type` | `type:count` pairs separated by spaces for every type with a count above 0 (settlers 0..66, completed buildings 0..82, sites 0..82) |
 
 Cost: per row about 83 short list walks (guard 512 each), 22 stock calls and a few hundred reads, once per 500 ticks per computer; the OFFENCE_SUPPLY census does more every 3,000 ticks. The file grows by about 1 KB per computer per 500 ticks (roughly 1 MB per hour of play at normal speed).
@@ -31,6 +32,7 @@ Cost: per row about 83 short list walks (guard 512 each), 22 stock calls and a f
 `python tools/economy-report.py [csv] [--pid N] [--player P] [--last]` groups the rows by process and map, prints per computer the population, carriers (min/median/last, idle), reserve and keep, soldiers, buildings and sites, the end stock, the buildings and settlers by name, and flags:
 
 - carriers drained (idle < 5 for three samples or more), reserve below keep, soldiers appearing while carriers were below keep (the r43 floor not holding), no carrier above the keep;
+- r50: "reserve below keep" counts a sample only when the reserve is also below max(5, carriers - room), so the deliberate r47 room (reserve = carriers - room while workers are missing) is no longer reported as a failed floor; the summary prints the room (last, how often above 0, the maximum; "unknown" for older files, which keep the r44 rule). The first r50 row renames an older `v02-economy.csv` (another header) to `v02-economy-<ms>.csv`;
 - r46: toolsmith output full (8 or more tools lying there), toolsmith without a worker, toolsmith inputs empty while iron and coal are in stock;
 - construction stalled (sites open, no completion for 20,000 ticks), sites without a builder, smithies without a smith (hammers), weapon chain and toolsmith starved of iron bars and coal;
 - population flat over the last 30,000 ticks with no residence site, soldiers above 60% of the population, goods at 0 in 80% of the samples.

@@ -10,8 +10,10 @@ constexpr int SettlerTypes=67,BuildingTypes=83,GoodCount=22;
 // Free stock columns of the home economy, S4ModApi good ids: LOG BOARD STONE IRONORE COAL IRONBAR SWORD BOW BATTLEAXE
 // BLOWGUN BACKPACKCATAPULT SHOVEL HAMMER AXE PICKAXE SAW BREAD FISH MEAT GRAIN FLOUR WATER.
 constexpr int Goods[GoodCount]={22,7,32,21,10,20,34,8,5,6,38,31,18,4,25,28,9,11,24,16,12,36};
-struct Ledger {uint8_t player=0;bool eco=false;int population=0,carriers=0,busy=0,reserve=0,keep=0,housing=0,tsout=-1,tsin=-1,tsworker=-1;int goods[GoodCount]={};int settlers[SettlerTypes]={};int ready[BuildingTypes]={};int sites[BuildingTypes]={};};
-inline const char*csvHeader(){return "ms,pid,tick,player,eco,population,carriers,busy,idle,reserve,keep,housing,houses_s,houses_m,houses_b,buildings,sites,barracks,toolsmiths,weaponsmiths,ironmines,coalmines,ironsmelters,soldiers,leaders,builders,diggers,gardeners,log,board,stone,ironore,coal,ironbar,sword,bow,battleaxe,blowgun,catapult,shovel,hammer,axe,pickaxe,saw,bread,fish,meat,grain,flour,water,tsout,tsin,tsworker,settlers,ready,sites_by_type";}
+// r50: room = the specialist room the r47 hook last left below the carrier total (reserve = carriers - room while builders,
+// diggers or gardeners are missing; 0 without a shortage, -1 unknown), so the report can tell it from a failed floor.
+struct Ledger {uint8_t player=0;bool eco=false;int population=0,carriers=0,busy=0,reserve=0,keep=0,housing=0,tsout=-1,tsin=-1,tsworker=-1,room=-1;int goods[GoodCount]={};int settlers[SettlerTypes]={};int ready[BuildingTypes]={};int sites[BuildingTypes]={};};
+inline const char*csvHeader(){return "ms,pid,tick,player,eco,population,carriers,busy,idle,reserve,keep,housing,houses_s,houses_m,houses_b,buildings,sites,barracks,toolsmiths,weaponsmiths,ironmines,coalmines,ironsmelters,soldiers,leaders,builders,diggers,gardeners,log,board,stone,ironore,coal,ironbar,sword,bow,battleaxe,blowgun,catapult,shovel,hammer,axe,pickaxe,saw,bread,fish,meat,grain,flour,water,tsout,tsin,tsworker,room,settlers,ready,sites_by_type";}
 inline int sum(const int*a,int n){int s=0;for(int i=0;i<n;i++)s+=a[i];return s;}
 // Soldiers of every race: settler types 29..44 and 61..63 (as the census counts them).
 inline int soldiers(const Ledger&l){int s=0;for(int t=29;t<=44;t++)s+=l.settlers[t];for(int t=61;t<=63;t++)s+=l.settlers[t];return s;}
@@ -24,6 +26,7 @@ inline int csvRow(const Ledger&l,uint32_t ms,uint32_t pid,uint32_t tick,char*out
  int w=snprintf(out,n,"%u,%u,%u,%u,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",ms,pid,tick,(unsigned)l.player,l.eco?1:0,l.population,l.carriers,l.busy,l.carriers-l.busy,l.reserve,l.keep,l.housing,l.ready[40],l.ready[41],l.ready[42],sum(l.ready,BuildingTypes),sum(l.sites,BuildingTypes),l.ready[24],l.ready[21],l.ready[22],l.ready[15],l.ready[17],l.ready[20],soldiers(l),l.settlers[44],l.settlers[3],l.settlers[2],l.settlers[50]);
  for(int g=0;g<GoodCount&&w>=0&&(size_t)w<n;g++)w+=snprintf(out+w,n-w,",%d",l.goods[g]);
  if(w>=0&&(size_t)w<n)w+=snprintf(out+w,n-w,",%d,%d,%d",l.tsout,l.tsin,l.tsworker); /* r46: the home toolsmith's output pile total, lowest input pile, worker byte (-1 without one) */
+ if(w>=0&&(size_t)w<n)w+=snprintf(out+w,n-w,",%d",l.room); /* r50: the r47 specialist room */
  if(w>=0&&(size_t)w<n)w+=snprintf(out+w,n-w,",%s,%s,%s",s,r,b);
  return w;}
 }

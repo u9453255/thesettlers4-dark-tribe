@@ -75,8 +75,9 @@ struct Engine {
  // r33: WATCH (job 0xB0): the gardener walks there (teleported) and waits; its work centre stays, it greens nothing.
  int parkOrders=0;std::vector<std::pair<int,int>> parks;
  void park(const Campaign&,const Gardener&g,int x,int y){parkOrders++;parks.push_back({x,y});audit(x,y,GardenerKeep);auto*f=find(g.id);f->g.x=x;f->g.y=y;f->g.reservedX=f->g.reservedY=f->g.aimX=f->g.aimY=-1;f->g.work=Work::Idle;f->g.escorted=true;f->g.destX=x;f->g.destY=y;}
- // r33: the Dark presence the bridge reports (tests set it).
- Intrusion intr;void intrusion(const Campaign&,Intrusion&out){out=intr;}
+ // r33: the Dark presence the bridge reports (tests set it). r50: the centre of the own Dark land as the bridge reads it
+ // (the mean position of ownCells unless a test sets one).
+ Intrusion intr;void intrusion(const Campaign&,Intrusion&out){out=intr;if(out.ownX<0&&!ownCells.empty()){long sx=0,sy=0;for(auto&c:ownCells){sx+=c.first;sy+=c.second;}out.ownX=(int)(sx/(long)ownCells.size());out.ownY=(int)(sy/(long)ownCells.size());}}
  std::vector<std::pair<int,int>> occupiedCells;bool parkedInside=false;
  std::vector<RingCell>&ringOf(const Target&t){auto&r=rings[t.id];if(r.empty()&&t.id){int n=t.kind==Farm?8:16;for(int i=0;i<n;i++)r.push_back(RingCell{t.doorX-n/2+i,t.doorY+1,true,false});}return r;}
  void ring(const Target&t,std::vector<RingCell>&out){
@@ -108,11 +109,14 @@ struct Engine {
  bool announce(const Campaign&c,uint32_t t,const Target&target){if(!allies)return false;callTarget=target;callUntil=t+CallTicks;caller=c.player;calls++;return true;}
  std::vector<Pulled> pulls;int pullExitX=-1,pullExitY=-1; /* r36: the fire guard's diagnostics hook */
  void pulled(const Campaign&,const Fire&,const std::vector<Soldier>&,const std::vector<Pulled>&who,int ex,int ey){for(auto&q:who)pulls.push_back(q);pullExitX=ex;pullExitY=ey;}
- void report(Event e,const Campaign&c){if(e==Event::Decline){declines++;lastDecline=c.reason;}if(e==Event::Launch)launches++;if(e==Event::Adopted)adopted++;if(e==Event::Lost)lost++;
+ void report(Event e,const Campaign&c){if(e==Event::Decline){declines++;lastDecline=c.reason;}if(e==Event::Launch){launches++;lastLaunch=c.reason;}if(e==Event::Adopted)adopted++;if(e==Event::Lost)lost++;
   if(e==Event::Ignored)ignored++;if(e==Event::Avoid){avoids++;lastAvoid=c.reason;}if(e==Event::Fire){fires++;lastFire=c.reason;}if(e==Event::Siege)sieges++;if(e==Event::Greening)greenings++;if(e==Event::Reclaim){reclaims++;lastReclaim=c.reason;}if(e==Event::Return)lastReturn=c.reason;
   if(e==Event::Front)fronts++;if(e==Event::Hunt)hunts++;if(e==Event::Join)joins++;if(e==Event::Call)calls+=0;if(e==Event::Convoy){convoys++;lastConvoy=c.reason;}
-  if(e==Event::Defend){defends++;if(!*firstDefend)firstDefend=c.reason;lastDefend=c.reason;}}
+  if(e==Event::Defend){defends++;if(!*firstDefend)firstDefend=c.reason;lastDefend=c.reason;lastBeyond=c.beyondFire;lastLandX=c.threatLandX;lastLandY=c.threatLandY;if(!strncmp(c.reason,"extended",8))extensions++;}
+  if(e==Event::DefendFire){fireDrops++;lastDrop=c.fireDrop;lastDropThreat=c.reason;}}
  int convoys=0,defends=0;const char*lastConvoy="";const char*firstDefend="";const char*lastDefend="";
+ /* r50: OFFENCE_DEFEND extensions, beyondFire and landAt of the last OFFENCE_DEFEND; OFFENCE_DEFEND_FIRE count and the last one */
+ int extensions=0,lastLandX=-1,lastLandY=-1,fireDrops=0;bool lastBeyond=false;FireDrop lastDrop{};const char*lastDropThreat="";const char*lastLaunch="";
 };
 static Fire F(const std::vector<Target>&all,int ready=-1,const std::vector<Site>&sites={}){return fireFrom(all,ready,sites);}
 template<class E> static uint32_t run(Campaign&c,E&e,uint32_t from,uint32_t ticks){uint32_t t=from;for(;t<from+ticks;t+=Period)step(c,t,e);return t;}
@@ -458,6 +462,23 @@ static void reclaiming(){
  // Reclaiming goes on while an army is away (free gardeners only) and never changes the campaign's goal.
  {Engine e(12);e.add(1,Farm,200,40);e.darkUnits.push_back({199,43});Campaign c=fresh();launch(c,e,T0,A);assert(c.gardeners==10);
   for(int x=50;x<=70;x+=4)e.darkCells.push_back({x,30});int before=e.reclaims;run(c,e,T0+Period,ReclaimEvery+Period);assert(e.reclaims>before&&!strcmp(e.lastReclaim,"border")&&c.gardeners==10);}
+ // r50: own Dark land rising near home: the attack leaves a home guard (HomeGuard free gardeners at home), and the reclaim
+ // pass sends them to that land while the attack runs, without touching the campaign's gardeners.
+ {Engine e(12);e.add(1,Farm,200,40);e.darkUnits.push_back({199,43});for(int x=60;x<=100;x+=2)for(int y=56;y<=66;y+=2)e.ownCells.push_back({x,y});e.intr.own=(int)e.ownCells.size();e.intr.rise=5;
+  Campaign c=fresh();launch(c,e,T0,A);int want=std::min(gardenersWanted(40),gardenersFor(Style::Assault,(int)e.army.size()));
+  int home=0;for(auto&f:e.gards)if(!e.held(c,f.g.id))home++;
+  assert(e.launches==1&&c.gardeners==want-HomeGuard&&home>=HomeGuard&&strstr(e.lastLaunch,"home guard"));
+  size_t left=e.ownCells.size();int before=e.reclaims;run(c,e,T0+Period,ReclaimEvery*2);
+  assert(e.reclaims>before&&e.ownCells.size()<left&&c.gardeners==want-HomeGuard&&c.style==Style::Assault);}
+ // Only six gardeners at home: the attack still takes MinGardeners and leaves HomeGuard at home (the cap alone would take all six).
+ {Engine e(6);e.add(1,Farm,200,40);e.darkUnits.push_back({199,43});for(int x=60;x<=100;x+=2)for(int y=56;y<=66;y+=2)e.ownCells.push_back({x,y});e.intr.own=(int)e.ownCells.size();e.intr.rise=5;
+  Campaign c=fresh();launch(c,e,T0,A);int home=0;for(auto&f:e.gards)if(!e.held(c,f.g.id))home++;
+  assert(e.launches==1&&c.gardeners==MinGardeners&&home==6-MinGardeners&&home>=HomeGuard&&c.want==guardedWant(std::min(gardenersWanted(40),gardenersFor(Style::Assault,(int)e.army.size())),true));}
+ // Without a rise and below SeriousCells (or without reclaimable land near home) the attack takes its full number.
+ {Engine e(12);e.add(1,Farm,200,40);e.darkUnits.push_back({199,43});for(int x=60;x<=100;x+=2)for(int y=56;y<=66;y+=2)e.ownCells.push_back({x,y});e.intr.own=(int)e.ownCells.size();
+  Campaign c=fresh();launch(c,e,T0,A);assert(c.gardeners==std::min(gardenersWanted(40),gardenersFor(Style::Assault,(int)e.army.size()))&&!strcmp(e.lastLaunch,"assault"));}
+ {Engine e(12);e.add(1,Farm,200,40);e.darkUnits.push_back({199,43});for(int x=300;x<=340;x+=2)e.ownCells.push_back({x,300});e.intr.own=SeriousCells*2; /* beyond LaunchReach of home */
+  Campaign c=fresh();launch(c,e,T0,A);assert(c.gardeners==std::min(gardenersWanted(40),gardenersFor(Style::Assault,(int)e.army.size()))&&!strcmp(e.lastLaunch,"assault"));}
 }
 static void losses(){
  Engine e;e.add(1,Temple,100,40);Campaign c=fresh();launch(c,e,T0,A);
@@ -767,7 +788,7 @@ struct Soak {
  // r33: WATCH: walk there (job 0xB0, no search on the way or on arrival), then wait; the work centre stays.
  int parkOrders=0;
  void park(const Campaign&,const Gardener&g,int x,int y){if(auto*f=find(g.id))if(f->alive){parkOrders++;f->tx=x;f->ty=y;f->working=false;f->g.aimX=f->g.aimY=f->g.reservedX=f->g.reservedY=-1;f->g.work=Work::Busy;f->g.escorted=true;f->g.destX=x;f->g.destY=y;}}
- Intrusion intr;void intrusion(const Campaign&,Intrusion&out){out=intr;}
+ Intrusion intr;void intrusion(const Campaign&,Intrusion&out){out=intr;if(out.ownX<0){long sx=0,sy=0,n=0;for(auto&p:patch)if(dark(p.first,p.second)){sx+=p.first;sy+=p.second;n++;}if(n){out.ownX=(int)(sx/n);out.ownY=(int)(sy/n);}}} /* r50: the own Dark centre */
  void sendGardener(const Campaign&,const Gardener&g,int x,int y){if(auto*f=find(g.id))if(f->alive)order(*f,x,y);}
  void moveGardeners(const Campaign&,const std::vector<Gardener>&gs,int x,int y){int k=0;for(auto&g:gs)if(auto*f=find(g.id))if(f->alive){auto&d=spiral[std::min<size_t>(k++,spiral.size()-1)];order(*f,x+2*d.first,y+2*d.second);}}
  void ring(const Target&t,std::vector<RingCell>&out){out.clear();for(auto&c:rings[t.id])out.push_back(RingCell{c.first,c.second,dark(c.first,c.second),soldierAt(c.first,c.second)});}
@@ -837,7 +858,7 @@ static void scaling(){
   assert(gardenersFor(Style::Assault,r.army)==r.assaultG&&gardenersFor(Style::Pincer,r.army)==r.assaultG&&gardenersFor(Style::Allied,r.army)==r.alliedG&&gardenersWanted(r.army)==r.wanted);}
  assert(raidSize(4)==4&&huntSize(3)==3&&escortSize(0)==0&&gardenersFor(Style::Assault,1000)==MaxGardeners&&gardenersWanted(1000)==MaxGardeners&&gardenersWanted(0)==GardenersWanted);
  // Recruitment and the toolsmith orders follow the larger number.
- assert(recruitOrder(12,0,0,5,true,nullptr,16)==1&&recruitOrder(16,0,0,5,true,nullptr,16)==0&&shovelTarget(12,0,0,16)==ShovelBatch&&shovelOrder(15,0,ShovelReserve,0,1,nullptr,16)==1);
+ assert(recruitOrder(12,0,0,5,true,nullptr,16)==1&&recruitOrder(16,0,0,5,true,nullptr,16)==0&&shovelTarget(10,0,0,16)==ShovelBatch&&shovelTarget(12,0,0,16)==16-12+ShovelReserve&&shovelOrder(15,0,ShovelReserve,0,1,nullptr,16)==1);
  // Launches: armies of 10, 30, 60 and 120 (the pool minus the home reserve) take the scaled sizes, gardeners capped by what exists.
  for(int army:{10,30,60,120})for(int style:{R,A,P,S,H}){
   int pool=army+std::max(HomeReserve,army/5);while(pool-std::max(HomeReserve,pool/6)<army)pool++;while(pool-std::max(HomeReserve,pool/6)>army)pool--;
@@ -849,6 +870,14 @@ static void scaling(){
   int want=std::min(gardenersWanted(pool),gardenersFor((Style)style,take));
   if(e.launches!=1||(int)e.army.size()!=take||c.want!=want)fprintf(stderr,"scaling: army %d style %s launches %d took %d want %d/%d\n",army,styleName((Style)style),e.launches,(int)e.army.size(),c.want,want);
   assert(e.launches==1&&(int)e.army.size()==take&&c.want==want&&c.gardeners==(style==H?0:want));}
+ // r50: own Dark land of SeriousCells with reclaimable cells near home: every style takes HomeGuard gardeners fewer (at least
+ // MinGardeners) and at least HomeGuard free gardeners stay at home; the launch says so.
+ assert(guardedWant(10,true)==6&&guardedWant(4,true)==MinGardeners&&guardedWant(2,true)==2&&guardedWant(1,true)==1&&guardedWant(10,false)==10);
+ for(int style:{R,A,P,S}){Engine e(MaxGardeners);e.add(1,Farm,140,40);for(int x=70;x<=150;x+=2)e.darkCells.push_back({x,40});for(int x=60;x<=100;x+=2)for(int y=56;y<=70;y+=2)e.ownCells.push_back({x,y});e.intr.own=(int)e.ownCells.size();assert(e.intr.own>=SeriousCells);
+  Campaign c=fresh(style);launch(c,e,T0,style);int take=(int)e.army.size(),want=std::min(gardenersWanted(40),gardenersFor((Style)style,take));
+  int home=0;for(auto&f:e.gards)if(!e.held(c,f.g.id))home++;
+  if(e.launches!=1||c.want!=guardedWant(want,true)||c.gardeners!=c.want||home<HomeGuard)fprintf(stderr,"home guard: style %s launches %d want %d/%d held %d home %d\n",styleName((Style)style),e.launches,c.want,guardedWant(want,true),c.gardeners,home);
+  assert(e.launches==1&&c.want==guardedWant(want,true)&&c.gardeners==c.want&&home>=HomeGuard&&strstr(e.lastLaunch,"home guard"));}
  // Variety stays for large armies: every style shows up over many decisions with 120 soldiers.
  {int seen[6]={};for(int k=0;k<150;k++){Engine e(MaxGardeners);e.pool.clear();for(int i=0;i<144;i++)e.pool.push_back(Soldier{(uint16_t)(100+i),(uint16_t)(29+i%2),(uint32_t)(1000+i),40,40});
    e.add(1,Farm,140,40);e.add(2,Farm,150,70);for(int x=70;x<=90;x+=2)e.darkCells.push_back({x,50});for(int i=0;i<4;i++)e.darkUnits.push_back({100+i,90});
@@ -1026,6 +1055,9 @@ static void defending(){
  {Engine e(8);e.add(1,Farm,100,40);Campaign c=fresh(A);launch(c,e,T0,A);std::vector<Soldier> m=e.army;e.intr.own=SeriousCells+10;e.intr.fighters={{50,44}};for(int x=50;x<=56;x+=2)e.ownCells.push_back({x,50});
   c.phase=Phase::Assault;c.ringSize=9;c.ringDark=3;c.lookAt=0;assert(!answer(c,T0+DefendLook*4,e,m)&&c.style==Style::Assault);
   c.ringDark=4;c.lookAt=0;assert(answer(c,T0+DefendLook*5,e,m)&&c.style==Style::Defend);}
+ // r50: a recall still answers the Dark fighters (r37), even when they are few and far from rising own Dark land (no land aim).
+ {Engine e(8);e.add(1,Farm,100,40);Campaign c=fresh(A);launch(c,e,T0,A);std::vector<Soldier> m=e.army;for(int x=90;x<=110;x+=2)for(int y=56;y<=64;y+=2)e.ownCells.push_back({x,y});
+  e.intr.own=SeriousCells+10;e.intr.rise=10;e.intr.fighters={{200,60}};c.phase=Phase::Assault;c.lookAt=0;assert(answer(c,T0+DefendLook*5,e,m)&&c.style==Style::Defend&&distance(c.frontX,c.frontY,200,60)<=1&&e.lastLandX<0);}
  // Dark fighters heavier than the whole army: no defence ("declined: threat too strong").
  {Engine e(8);for(int i=0;i<50;i++)e.intr.fighters.push_back({60+i%5,40+i/5});Campaign c=fresh();run(c,e,10,ReclaimStart+DefendLook*2);
   assert(e.defends>=1&&!strcmp(e.lastDefend,"declined: threat too strong")&&c.phase==Phase::Idle);}
@@ -1037,9 +1069,33 @@ static void defending(){
  // alone; a Dark Gardener outside is defended against with every order outside its keep.
  {Engine e(8);e.add(1,Temple,100,40);e.add(2,Farm,300,300,false);e.intr.gardeners={{110,44}};for(int x=96;x<=110;x+=2)e.ownCells.push_back({x,48});e.intr.own=SeriousCells+1;
   Fire f=e.fireNow();assert(f.on&&closer(110,44,f,HuntKeep));e.checkKeep=true;Campaign c=fresh();uint32_t t=run(c,e,10,ReclaimStart+DefendLook*3);assert(c.phase==Phase::Idle&&e.defends==0);
+  /* r50 diagnostics: the left-out Dark Gardener is reported once (OFFENCE_DEFEND_FIRE), with its distance from the fire centre */
+  assert(e.fireDrops==1&&e.lastDrop.count==1&&e.lastDrop.gardeners==1&&e.lastDrop.fighters==0&&e.lastDrop.ax==110&&e.lastDrop.ay==44&&e.lastDrop.cx==f.z[0].x&&e.lastDrop.cy==f.z[0].y);
+  assert(e.lastDrop.nearest>0&&e.lastDrop.nearest<HuntKeep&&fabs(e.lastDrop.outer-e.lastDrop.nearest)<1e-9&&!strcmp(e.lastDropThreat,"none"));
   e.intr.gardeners.push_back({160,44});t=run(c,e,t,DefendLook*2);assert(c.style==Style::Defend&&c.phase!=Phase::Idle);
   assert(!strcmp(e.firstDefend,"start: intrusion")); /* r33 review: 151 owned cells, none reclaimable (all within FrontKeep): not serious */
-  run(c,e,t,3000);assert(e.keepViolations==0);for(auto&g:e.goals)assert(!closer(g.first,g.second,f,HuntKeep-spread(40)));}
+  run(c,e,t,3000);assert(e.keepViolations==0);for(auto&g:e.goals)assert(!closer(g.first,g.second,f,HuntKeep-spread(40)));
+  assert(e.fireDrops>=1&&e.fireDrops<=1+(int)((t+3000)/FireDropNote));} /* at most one note per FireDropNote */
+ // r50: two Dark Gardeners 100 tiles from rising own Dark land: the defence goes to the land (area = landAt), and its soldiers
+ // answer the units once they come within DefendReach of it; next to the land the units stay the area; without a rise (and
+ // own below SeriousCells) the far units are the area as before.
+ for(int k=0;k<3;k++){Engine e(8);e.cfg.mode=0;for(int x=90;x<=110;x+=2)for(int y=56;y<=64;y+=2)e.ownCells.push_back({x,y});e.intr.own=(int)e.ownCells.size();e.intr.rise=k==2?0:10;
+  e.intr.gardeners=k==1?std::vector<std::pair<int,int>>{{100,68},{101,68}}:std::vector<std::pair<int,int>>{{200,60},{201,60}};
+  Campaign c=fresh();uint32_t t=10;for(;t<ReclaimStart+DefendLook*4&&c.phase==Phase::Idle;t+=Period)step(c,t,e);
+  assert(c.style==Style::Defend&&c.phase!=Phase::Idle);int fx=c.frontX,fy=c.frontY;
+  if(k==0)assert(e.lastLandX>=0&&fx==e.lastLandX&&fy==e.lastLandY&&distance(fx,fy,100,60)<=12);
+  if(k==1)assert(e.lastLandX>=0&&distance(fx,fy,100,68)<=1);
+  if(k==2)assert(e.lastLandX<0&&distance(fx,fy,200,60)<=1);
+  if(k==0){t=run(c,e,t,100);assert(sawGoalNear(e,0,fx,fy,12)&&!sawGoalNear(e,0,200,60,40)&&c.phase!=Phase::Return&&c.phase!=Phase::Idle);
+   size_t from=e.goals.size();int ux=c.stageX+12,uy=c.stageY;assert(distance(ux,uy,c.frontX,c.frontY)<=DefendReach);e.intr.gardeners={{ux,uy}};run(c,e,t,DefendLook*3);if(!sawGoalNear(e,from,ux,uy,3)){fprintf(stderr,"chase: phase %d front %d,%d stage %d,%d unit %d,%d goals %d last return %s own left %d\n",(int)c.phase,c.frontX,c.frontY,c.stageX,c.stageY,ux,uy,(int)(e.goals.size()-from),e.lastReturn,(int)e.ownCells.size());for(size_t i=from;i<e.goals.size();i++)fprintf(stderr,"  goal %d,%d\n",e.goals[i].first,e.goals[i].second);}assert(sawGoalNear(e,from,ux,uy,3));}}
+ // r50: the next area lies beyond the Temple's fire with no leg around it: the defence ends "no way outside the fire defence"
+ // and its OFFENCE_DEFEND says beyondFire=1.
+ {Engine e(8);e.cfg.mode=0;e.add(1,Temple,100,40);e.add(2,Farm,300,300,false);
+  for(int x=50;x<=60;x+=2)for(int y=38;y<=46;y+=2)e.ownCells.push_back({x,y});for(int x=150;x<=160;x+=2)for(int y=38;y<=46;y+=2)e.ownCells.push_back({x,y});
+  e.intr.own=(int)e.ownCells.size();Fire f=e.fireNow();assert(f.on);Campaign c=fresh();uint32_t t=10;
+  for(;t<ReclaimStart+DefendTime&&strcmp(e.lastReturn,"no way outside the fire defence");t+=Period)step(c,t,e);
+  if(strcmp(e.lastReturn,"no way outside the fire defence")||!e.lastBeyond)fprintf(stderr,"beyond the fire: last return '%s' beyond %d front %d,%d fronts %d\n",e.lastReturn,(int)e.lastBeyond,c.frontX,c.frontY,e.fronts);
+  assert(!strcmp(e.lastReturn,"no way outside the fire defence")&&e.lastBeyond&&e.fronts>=1&&c.frontX>=150);}
 }
 // r37: land alone never keeps the army home (field, The Alliance: thousands of own Dark cells from the start, 3 attacks in
 // 112,000 ticks): with a farm in reach the attacks come first and a land-only defence comes LandDefendGap after the first
@@ -1056,6 +1112,17 @@ static void landFirst(){
  {Engine e(12);for(int x=80;x<=120;x+=2)for(int y=60;y<=80;y+=2)e.ownCells.push_back({x,y});e.intr.own=SeriousCells*10;Campaign c=fresh();
   uint32_t t=run(c,e,10,ReclaimStart+DefendLook*3);assert(c.style==Style::Defend&&c.phase!=Phase::Idle&&(int)e.army.size()<=escortSize(34)&&!strcmp(e.firstDefend,"start: serious intrusion"));
   run(c,e,t,LandDefendTime+HomeTimeout);assert(c.phase==Phase::Idle&&(!strcmp(e.lastReturn,"defence time")||!strcmp(e.lastReturn,"land clean")));}
+ // r50: land being taken now (a rise of SeriousRise in one scan pass) skips the gap: a defence starts inside it, escort-sized,
+ // logged "start: serious rise"; old land without a rise (500 own cells) still waits behind the attacks.
+ {Engine e(12);e.add(1,Farm,140,40);for(int x=80;x<=120;x+=2)for(int y=60;y<=80;y+=2)e.ownCells.push_back({x,y});e.intr.own=500;
+  Campaign c=fresh();uint32_t t=10,launched=0,defended=0;const char*why="";int defArmy=0;
+  auto go=[&](uint32_t until){for(;t<until&&!defended;t+=Period){bool idle=c.phase==Phase::Idle;step(c,t,e);
+    if(idle&&c.phase!=Phase::Idle){if(c.style==Style::Defend){defended=t;why=e.lastDefend;defArmy=(int)e.army.size();}else if(!launched)launched=t;}
+    if(c.phase==Phase::Idle&&e.world.empty())e.add((uint16_t)(100+e.collapsed),Farm,140,40);}};
+  go(firstAttack(1)+LandDefendGap/2);assert(launched&&!defended);
+  e.intr.rise=SeriousRise;go(firstAttack(1)+LandDefendGap-1000);
+  if(!defended||strcmp(why,"start: serious rise"))fprintf(stderr,"serious rise: launched %u defended %u why '%s' last defend '%s'\n",launched,defended,why,e.lastDefend);
+  assert(defended&&defended<firstAttack(1)+LandDefendGap&&!strcmp(why,"start: serious rise")&&defArmy<=escortSize(34));}
 }
 // r37: a march is late by its budget or by no progress, never by a fixed 4,000 ticks; a failed target is replaced from where
 // the army stands instead of walked home from.
@@ -1189,7 +1256,12 @@ static void toolsmithShovels(){
  const char*why="x";
  // Gardeners missing and the shovels down to the reserve: top the order up to the shovels still needed, at most a batch.
  assert(shovelOrder(0,0,ShovelReserve,0,1,&why)==ShovelBatch&&!*why);
- assert(shovelOrder(GardenersWanted-1,0,ShovelReserve,0,1,&why)==1&&shovelOrder(GardenersWanted-1,0,0,0,1)==3&&shovelOrder(GardenersWanted-2,0,-3,0,1)==ShovelBatch);
+ assert(shovelOrder(GardenersWanted-1,0,ShovelReserve,0,1,&why)==1&&shovelOrder(GardenersWanted-1,0,0,0,1)==ShovelReserve+1&&shovelOrder(GardenersWanted-6,0,-3,0,1)==ShovelBatch);
+ // r50: one spare shovel (was two) and batches of six (was four): recruitment goes on from 2 free shovels, and no order
+ // ever puts more than ShovelBatch on top of what is ordered.
+ assert(ShovelReserve==1&&ShovelBatch==6&&recruitOrder(0,0,0,2,true,&why)==1&&!*why&&recruitOrder(0,0,0,1,true,&why)==0&&!strcmp(why,"no spare shovels"));
+ for(int alive=0;alive<=GardenersWanted;alive++)for(int shovels=-2;shovels<=3;shovels++)for(int ordered=0;ordered<=8;ordered++){int a=shovelOrder(alive,0,shovels,ordered,1);assert(a<=ShovelBatch&&(a<=0||ordered+a<=ShovelBatch));}
+ {ShovelWatch w;shovelNoted(w,true,ShovelBatch,ShovelBatch);assert(shovelRestore(w,0)==ShovelBatch);} /* a native clear of a full batch is put back */
  // Already ordered: only the difference; a full order adds nothing.
  assert(shovelOrder(0,0,1,1,1,&why)==ShovelBatch-1&&shovelOrder(0,0,1,ShovelBatch,1,&why)==0&&!strcmp(why,"already ordered")&&shovelOrder(0,0,1,ShovelBatch+3,1,&why)==0);
  // A continuous order (100, set by someone else) is never touched.
@@ -1248,12 +1320,12 @@ static void carrierReserveFloor(){
 }
 // r44: the economy ledger row matches the header column by column and survives a short buffer.
 static void ledgerRows(){
- dtledger::Ledger l;l.player=3;l.eco=true;l.population=250;l.carriers=60;l.busy=12;l.reserve=45;l.keep=45;l.housing=300;l.settlers[1]=60;l.settlers[2]=5;l.settlers[3]=8;l.settlers[29]=20;l.settlers[44]=2;l.settlers[50]=4;l.settlers[61]=1;l.ready[40]=3;l.ready[41]=2;l.ready[24]=1;l.ready[21]=1;l.sites[41]=1;l.sites[22]=1;for(int g=0;g<dtledger::GoodCount;g++)l.goods[g]=g;l.tsout=7;l.tsin=3;l.tsworker=1;
+ dtledger::Ledger l;l.player=3;l.eco=true;l.population=250;l.carriers=60;l.busy=12;l.reserve=45;l.keep=45;l.housing=300;l.settlers[1]=60;l.settlers[2]=5;l.settlers[3]=8;l.settlers[29]=20;l.settlers[44]=2;l.settlers[50]=4;l.settlers[61]=1;l.ready[40]=3;l.ready[41]=2;l.ready[24]=1;l.ready[21]=1;l.sites[41]=1;l.sites[22]=1;for(int g=0;g<dtledger::GoodCount;g++)l.goods[g]=g;l.tsout=7;l.tsin=3;l.tsworker=1;l.room=4;
  auto commas=[](const char*s){int n=0;for(;*s;s++)n+=*s==',';return n;};
- char row[2600];int w=dtledger::csvRow(l,123,45,500,row,sizeof(row));assert(w>0&&(size_t)w<sizeof(row)&&commas(dtledger::csvHeader())==55&&commas(row)==55);
- assert(!strcmp(row,"123,45,500,3,1,250,60,12,48,45,45,300,3,2,0,7,2,1,1,0,0,0,0,23,2,8,5,4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,7,3,1,1:60 2:5 3:8 29:20 44:2 50:4 61:1,21:1 24:1 40:3 41:2,22:1 41:1"));
- dtledger::Ledger z;w=dtledger::csvRow(z,1,2,3,row,sizeof(row));assert(w>0&&commas(row)==55&&!strcmp(row+w-3,",,,")&&dtledger::soldiers(z)==0);
- char tiny[16];w=dtledger::csvRow(l,123,45,500,tiny,sizeof(tiny));assert(w>=(int)sizeof(tiny)&&tiny[15]==0&&commas(tiny)<55);
+ char row[2600];int w=dtledger::csvRow(l,123,45,500,row,sizeof(row));assert(w>0&&(size_t)w<sizeof(row)&&commas(dtledger::csvHeader())==56&&commas(row)==56&&strstr(dtledger::csvHeader(),",tsworker,room,settlers,")); /* r50: room */
+ assert(!strcmp(row,"123,45,500,3,1,250,60,12,48,45,45,300,3,2,0,7,2,1,1,0,0,0,0,23,2,8,5,4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,7,3,1,4,1:60 2:5 3:8 29:20 44:2 50:4 61:1,21:1 24:1 40:3 41:2,22:1 41:1"));
+ dtledger::Ledger z;w=dtledger::csvRow(z,1,2,3,row,sizeof(row));assert(w>0&&commas(row)==56&&!strcmp(row+w-6,",-1,,,")&&z.room==-1&&dtledger::soldiers(z)==0);
+ char tiny[16];w=dtledger::csvRow(l,123,45,500,tiny,sizeof(tiny));assert(w>=(int)sizeof(tiny)&&tiny[15]==0&&commas(tiny)<56);
  for(int t=0;t<dtledger::SettlerTypes;t++)l.settlers[t]=99999;char big[64];dtledger::list(big,sizeof(big),l.settlers,dtledger::SettlerTypes);assert(big[63]==0&&strlen(big)<64);
 }
 // r46: surplus tool orders are cleared (never shovels, never continuous), and the output capacity marks a clog.
@@ -1262,12 +1334,48 @@ static void toolWatch(){
  assert(surplusOrder(25,2,4,6)&&surplusOrder(18,6,1,7)&&surplusOrder(4,2,99,8)&&!surplusOrder(31,6,4,8)&&!surplusOrder(25,0,4,7)&&!surplusOrder(25,2,0,7)&&!surplusOrder(25,2,100,7)&&!surplusOrder(25,2,-1,7));
  assert(!surplusOrder(25,1,12,2)&&!surplusOrder(25,1,12,7)&&!surplusOrder(25,5,12,5)&&surplusOrder(25,5,12,6)&&OutputNearFull<OutputCapacity&&ToolSurplus>=2);
  assert(!clogged(0)&&!clogged(7)&&clogged(8)&&clogged(9)&&ToolWatchEvery<=50);
- /* r49: drop from the fullest non-shovel pile only at DropAt with no free shovel lying there and never a reserved piece */
+ /* r49: drop from the fullest non-shovel pile only at DropAt and never a reserved piece; r50: only from a pile with DropKeep or
+    more lying pieces (never the last one), and a free shovel lying there no longer stops it */
  struct L{int good,count,reserved;};
  {L a[]={{4,0,0},{18,1,0},{25,6,0},{31,0,0}};assert(dropCandidate(a,4,7)==2&&dropCandidate(a,4,8)==2&&dropCandidate(a,4,6)==-1);}
- {L b[]={{18,2,0},{25,5,0},{31,1,0}};assert(dropCandidate(b,3,8)==-1);}                  /* a free shovel is there: wait for the recruit */
+ {L b[]={{18,2,0},{25,5,0},{31,1,0}};assert(dropCandidate(b,3,8)==1);}                   /* r50: a free shovel lying there (refused by recruitment at the reserve) no longer blocks */
  {L c[]={{18,2,0},{25,5,0},{31,1,1}};assert(dropCandidate(c,3,8)==1);}                   /* the shovel is reserved: make room for another */
  {L d[]={{18,3,3},{25,4,4},{31,0,0}};assert(dropCandidate(d,3,7)==-1);}                  /* everything reserved: nothing to drop */
  {L e[]={{18,3,1},{25,3,0},{31,0,0}};assert(dropCandidate(e,3,7)==1&&DropAt<OutputCapacity&&DropEvery>=ToolWatchEvery);}
+ /* r50 (plan cases): single pieces are never taken, a pickaxe pile of three gives one beside a free shovel */
+ {L f[]={{25,1,0},{18,1,0},{31,1,1},{4,1,0},{27,1,0},{28,1,0},{29,1,0},{30,1,0}};assert(dropCandidate(f,8,8)==-1&&DropKeep==2);}
+ {L g[]={{25,3,0},{31,1,0},{18,1,0},{4,1,0},{27,1,0},{28,1,0}};assert(dropCandidate(g,6,8)==0);}
+ {L h[]={{25,1,0},{27,1,0},{29,1,0},{18,1,0},{4,1,0},{28,1,0},{31,1,0}};assert(dropCandidate(h,7,7)==-1);}
+ {L i[]={{18,2,1},{25,1,0},{31,0,0}};assert(dropCandidate(i,3,7)==0);}                  /* two lying, one reserved: the free one goes, the reserved one stays */
+ /* never a shovel, never the last piece, never a reserved one: the pile keeps at least one after the drop */
+ for(int a=0;a<4;a++)for(int r=0;r<=a;r++)for(int b=0;b<4;b++)for(int q=0;q<3;q++){L p[]={{25,a,r},{18,b,0},{31,q,0}};int k=dropCandidate(p,3,8);
+  if(k>=0)assert(p[k].good!=31&&p[k].count>=DropKeep&&p[k].count-p[k].reserved>=1&&p[k].count-1>=1);
+  else assert(!(a>=2&&a-r>=1)&&b<2);}
 }
-int main(){toolsmithShovels();basics();targetOrder();geometry();gating();styles();allied();campaign();reattack();fallback();defence();gardenerLosses();farmReturns();steering();sweeping();hunting();reclaiming();landFirst();marchBudget();losses();adoption();timeouts();detours();reviewFixes();fireRules();guarding();guardReview();keepAudit();soak();soakTwo();scaling();convoyRules();convoyField();convoySoak();defending();reclaimRegression();unreachable();reviewR33();defenceSoak();carrierReserveFloor();ledgerRows();toolWatch();puts("PASS: offence-tests");return 0;}
+// r50: a land-only defence that wins goes on (LandDefendStep at a time, DefendTime at most); one that does not ends at
+// LandDefendTime; land cleaned early ends it early; Dark units near the area keep it going. The own Dark count is the
+// test's (Endless: the fake gardeners green no own cell, so the land never runs out by itself).
+struct Endless:Engine {using Engine::Engine;
+ void sendGardener(const Campaign&c,const Gardener&g,int x,int y){auto keep=ownCells;Engine::sendGardener(c,g,x,y);ownCells=keep;}
+ bool ownDark(const Campaign&,int x,int y,int r,const std::vector<Keep>&keep,int&dx,int&dy){bool found=false;int best=0;for(auto&d:ownCells){if(kept(keep,d.first,d.second))continue;int k=distance(x,y,d.first,d.second);if(k<=r&&(!found||k<best)){found=true;best=k;dx=d.first;dy=d.second;}}return found;}};
+static void defenceLength(){
+ assert(LandDefendTime+2*LandDefendStep==DefendTime&&LandDefendGain==40);
+ /* mode 0: own Dark flat; 1: falling 60 per LandDefendStep; 2: the land clean 1,000 ticks in; 3: flat, a Dark Gardener at the area from 2,000 ticks on */
+ for(int mode=0;mode<4;mode++){Endless e(12);e.cfg.mode=0;for(int x=90;x<=110;x+=2)for(int y=56;y<=64;y+=2)e.ownCells.push_back({x,y});e.intr.own=500;
+  Campaign c=fresh();uint32_t t=10,start=0,end=0;
+  for(;t<ReclaimStart+DefendTime+3000&&!end;t+=Period){
+   if(start&&mode==1)e.intr.own=500-60*(int)((t-start)/LandDefendStep);
+   if(start&&mode==2&&t-start>=1000)e.ownCells.clear();
+   if(start&&mode==3&&t-start>=2000&&e.intr.gardeners.empty())e.intr.gardeners={{c.frontX+2,c.frontY}};
+   bool idle=c.phase==Phase::Idle;step(c,t,e);
+   if(idle&&c.phase!=Phase::Idle&&c.style==Style::Defend&&!start)start=t;
+   if(start&&!end&&c.phase!=Phase::Assault&&c.phase!=Phase::March)end=t;}
+  uint32_t length=end-start;
+  fprintf(stderr,"defence length mode %d: start %u length %u extensions %d last return '%s' last defend '%s'\n",mode,start,length,e.extensions,e.lastReturn,e.lastDefend);
+  assert(start&&end&&c.landOnly);
+  if(mode==0)assert(length>LandDefendTime&&length<=LandDefendTime+2*Period&&e.extensions==0&&!strcmp(e.lastReturn,"defence time"));
+  if(mode==1)assert(length>DefendTime&&length<=DefendTime+2*Period&&e.extensions==2&&!strcmp(e.lastReturn,"defence time"));
+  if(mode==2)assert(length<LandDefendTime&&e.extensions==0&&!strcmp(e.lastReturn,"land clean"));
+  if(mode==3)assert(length>DefendTime&&length<=DefendTime+2*Period&&e.extensions==2&&!strcmp(e.lastReturn,"defence time"));}
+}
+int main(){toolsmithShovels();basics();targetOrder();geometry();gating();styles();allied();campaign();reattack();fallback();defence();gardenerLosses();farmReturns();steering();sweeping();hunting();reclaiming();landFirst();marchBudget();losses();adoption();timeouts();detours();reviewFixes();fireRules();guarding();guardReview();keepAudit();soak();soakTwo();scaling();convoyRules();convoyField();convoySoak();defending();defenceLength();reclaimRegression();unreachable();reviewR33();defenceSoak();carrierReserveFloor();ledgerRows();toolWatch();puts("PASS: offence-tests");return 0;}

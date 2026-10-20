@@ -10,6 +10,25 @@ All in-game testing belongs to you. Offline checks cover code, pinned files, dis
 4. Start a NEW `00_Dark_Tribe_First_Dawn` custom map, player 1 human Dark and player 2 computer Viking. Keep races unchanged. Use a client height of at least 600 pixels.
 5. Observe at least two minutes before other tests: no crash or early victory/defeat. If an ending occurs, record its actual text/winner; sound alone is insufficient. Existing saves retain their old terrain, AI and bank and cannot validate the new scenario economy.
 
+## r50 checks - test first (gardener supply and land defence)
+
+Computers replace lost gardeners faster, their toolsmith drop never empties a pile or jams on a lying shovel, and they defend their own land better: a fast Dark spread is answered at once, a winning land defence keeps going, a defence goes to the land being lost rather than to a few far units, and attacks leave four gardeners at home while that land is under pressure. Attacks themselves are unchanged.
+
+**built, model-tested and staged with the full offline workflow on 2026-10-20; not yet play-tested.** Until the startup line ends with `gardener supply and land defence r50`, you are still running r49 or older.
+
+1. Start with `Launch Dark Tribe.cmd`. The startup line in `evidence/v02-runtime.log` ends with `shovel priority drop r49; gardener supply and land defence r50`. The first telemetry row renames the old `evidence/v02-economy.csv` (it has one column less) to `v02-economy-<number>.csv`; that is expected.
+2. Play Iron Kingdom (a new game) for a long session and push Dark land into the Viking territory, fast at least once (several Dark Gardeners or a new Dark building next to their land), and also kill some of their gardeners.
+3. Gardeners: after losses, `OFFENCE_RECRUIT player=2 gardeners=... wanted=...` should climb back to `wanted` within about 5,000 ticks; `OFFENCE_RECRUIT_WAIT ... reason=no spare shovels` should be rare.
+4. Toolsmith drops (only if the output ever fills): every `OFFENCE_TOOL_DROP ... lying=a->b` has `b` of 1 or more, and a full output with one shovel in it clears within about 500 ticks.
+5. Land defence in the log:
+   - `OFFENCE_DEFEND ... reason=start: serious rise` appears when you darken their land fast, even while they are attacking regularly.
+   - `OFFENCE_DEFEND ... reason=extended: land won back` (or `units near the area`, `still on the way`) shows a defence going past 3,000 ticks; its final `defence time` line should show a lower `own=` than its start line.
+   - `OFFENCE_DEFEND ... area=x,y landAt=x,y`: when area equals landAt the defence went to the land, not to your units.
+   - `OFFENCE_LAUNCH ... reason=... with a home guard` while their land is under pressure, and `OFFENCE_RECLAIM ... reason=own territory` lines during those attacks.
+6. Diagnostics to send back with the log (they decide the next round, no behaviour depends on them): `OFFENCE_DEFEND_FIRE` (your units the computer ignores because they stand near your Temple's fire), `OFFENCE_DEFEND ... beyondFire=1`, `OFFENCE_GARDENER_FAR` (their gardeners far from home) and `far=` in the recruit lines.
+7. After the session `python tools/economy-report.py --last`: the summary prints `room ...`; no "reserve below keep" flag while builders, diggers or gardeners are missing; gardeners above 0 late in the game. Attacks should still come as often as on r49 (about 16 per 166,000 ticks on Iron Kingdom).
+8. The Alliance (optional): its computers own much Dark land from the start, so most of their attacks launch `with a home guard` (four gardeners fewer); they must still attack regularly and not sit in defences.
+
 ## r49 checks - test first (shovel priority drop)
 
 When gardeners are missing and the computer's toolsmith output is full of other tools, one of the most numerous ones is thrown away so a shovel can be made.

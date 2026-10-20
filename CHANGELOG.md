@@ -6,6 +6,12 @@ The version stays **0.2.15** while updates come as numbered rounds. The mod's st
 
 ## 0.2.15 updates (October 2026)
 
+### r50: Computers defend their land better and replace gardeners faster (*not yet play-tested*)
+- Computers replace lost gardeners sooner: they keep only one spare shovel and order up to six at a time.
+- A full toolsmith no longer throws away the last tool of a kind, and a single shovel lying there can no longer block it for good.
+- When you darken a computer's land quickly, it reacts at once instead of finishing its attacks first, keeps defending while it is winning the land back, and goes to the land you are taking instead of chasing a couple of your units far away.
+- While its land is under pressure, a computer keeps four gardeners at home during its attacks so they can green the land back; the attacks themselves go on as before.
+
 ### r49: Shovels get priority when gardeners are missing (*not yet play-tested*)
 - If a computer's toolsmith is full of tools nobody takes while it needs shovels for new gardeners, it now throws one of the surplus tools away and makes the shovel.
 

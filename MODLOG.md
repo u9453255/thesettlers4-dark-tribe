@@ -1,5 +1,12 @@
 # Experiment journal
 
+## Round r50: gardener supply and land defence (2026-10-20, still 0.2.15)
+
+- User request: implement `research/R50_PLAN_0215.md` (field readings of pid 18584 on r49 and pid 31460 on r48, Iron Kingdom: replacement gardeners slow, the r49 drop emptying piles and jamming on a lying shovel, land defences cut short, deferred behind attacks, sent after far units and left without gardeners while attacks ran).
+- Implementation (research/AI_OFFENCE_0215.md Round r50): one spare shovel and shovel batches of six; drops only from piles with two or more pieces, no longer blocked by a free shovel lying in the output; the r47 room as a telemetry column (the report no longer calls the deliberate room a failed floor); a land-only defence extended by 1,500 ticks at a time (to 6,000) while it wins back 40+ own Dark cells, sees Dark units near the area or is still on its way; a rise of 40+ own Dark cells in one scan pass skips the 12,000-tick attacks-first gap (`start: serious rise`); a defence goes to the land being lost when the seen units are few (under 3), far (over 60) and none is near home (recalls still answer the Dark fighters); attacks leave a home guard of four gardeners while own Dark near home is rising or large; diagnostics `OFFENCE_DEFEND_FIRE`, `OFFENCE_DEFEND ... landAt= beyondFire=`, `OFFENCE_GARDENER_FAR` and `far=` in the recruit lines.
+- Additions beyond the plan's text, each explained in the research note: "still on the way" as an extension reason, "few units and none near home" for the land aim, recalls never aiming at land, and the home guard only while own land is reclaimable from home.
+- Status: built, model-tested (including a mutation run: every r50 rule reverted alone fails a test) and staged with the full offline workflow on 2026-10-20; not yet play-tested. Startup marker: `...; shovel priority drop r49; gardener supply and land defence r50`.
+
 ## Round r49: shovel priority at the toolsmith (2026-10-20, still 0.2.15)
 
 - User request: when gardeners are missing, the shovel request must get through even if the toolsmith's output is full of other tools.

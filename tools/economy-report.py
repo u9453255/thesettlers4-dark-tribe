@@ -38,7 +38,7 @@ GOODS = ['log', 'board', 'stone', 'ironore', 'coal', 'ironbar', 'sword', 'bow', 
 FIXED = ['ms', 'pid', 'tick', 'player', 'eco', 'population', 'carriers', 'busy', 'idle', 'reserve', 'keep', 'housing', 'houses_s',
          'houses_m', 'houses_b', 'buildings', 'sites', 'barracks', 'toolsmiths', 'weaponsmiths', 'ironmines', 'coalmines',
          'ironsmelters', 'soldiers', 'leaders', 'builders', 'diggers', 'gardeners'] + GOODS
-OPTIONAL = ['tsout', 'tsin', 'tsworker']  # r46 toolsmith columns; older files lack them (-1)
+OPTIONAL = ['tsout', 'tsin', 'tsworker', 'room']  # r46 toolsmith columns, r50 specialist room; older files lack them (-1)
 SAMPLE = 500  # ticks between two rows of one computer (dtledger::EcoEvery)
 
 
@@ -109,6 +109,18 @@ def longest(found):
     return max(found, key=lambda r: r[2]) if found else None
 
 
+def floor_failed(s):
+    """The reserve is below the keep for no reason: the native setter caps it at the carrier total, and since r47 the hook
+    stores at most carriers - room while builders, diggers or gardeners are missing (r50 column `room`; -1 in older files,
+    which keep the r44 rule)."""
+    if s['keep'] <= 0:
+        return False
+    limit = min(s['keep'], s['carriers'])
+    if s['room'] >= 0:
+        limit = min(limit, max(5, s['carriers'] - s['room']))
+    return s['reserve'] < limit
+
+
 def analyse(samples):
     first, last = samples[0], samples[-1]
     flags = []
@@ -120,9 +132,9 @@ def analyse(samples):
     drained = longest(runs(eco, lambda s: s['idle'] < 5))
     if drained and drained[2] >= 3:
         flags.append(f'carriers drained (idle < 5) for {drained[1] - drained[0] + SAMPLE} ticks from tick {drained[0]} to {drained[1]}')
-    below = sum(1 for s in eco if s['keep'] > 0 and s['reserve'] < min(s['keep'], s['carriers']))
+    below = sum(1 for s in eco if floor_failed(s))
     if below:
-        flags.append(f'reserve below keep in {below} samples (the r43 floor did not hold)')
+        flags.append(f'reserve below keep in {below} samples (the r43 floor did not hold; a deliberate r47 room is not counted)')
     capped = sum(1 for s in eco if s['keep'] > 0 and s['carriers'] <= s['keep'])
     if capped * 2 >= len(eco):
         flags.append(f'no carrier above the keep in {capped} of {len(eco)} samples: nothing can be drafted or recruited (the setter caps the reserve at the carrier total)')
@@ -190,9 +202,12 @@ def describe(pid, index, player, samples):
     idle = [s['idle'] for s in samples if s['eco']] or [0]
     sites = [s['sites'] for s in samples]
     flags, zero = analyse(samples)
+    rooms = [s['room'] for s in samples if s['room'] >= 0]
+    room = (f'; room last {last["room"]}, above 0 in {sum(1 for r in rooms if r > 0)} of {len(rooms)} samples (max {max(rooms)})'
+            if rooms else '; room unknown (file older than r50)')
     lines = [f'pid {pid} map {index} player {player}: ticks {first["tick"]}..{last["tick"]} ({len(samples)} samples)',
              f'  population {first["population"]} -> {last["population"]}, housing {last["housing"]}, houses s/m/b {last["houses_s"]}/{last["houses_m"]}/{last["houses_b"]}',
-             f'  carriers min {min(carriers)} median {int(statistics.median(carriers))} last {last["carriers"]}; idle min {min(idle)} last {last["idle"]}; reserve {last["reserve"]} keep {last["keep"]}',
+             f'  carriers min {min(carriers)} median {int(statistics.median(carriers))} last {last["carriers"]}; idle min {min(idle)} last {last["idle"]}; reserve {last["reserve"]} keep {last["keep"]}{room}',
              f'  soldiers {first["soldiers"]} -> {last["soldiers"]} (leaders {last["leaders"]}), gardeners {last["gardeners"]}, builders {last["builders"]}, diggers {last["diggers"]}',
              f'  buildings {first["buildings"]} -> {last["buildings"]}, sites median {int(statistics.median(sites))} last {last["sites"]}; barracks {last["barracks"]} toolsmiths {last["toolsmiths"]} weaponsmiths {last["weaponsmiths"]} ironmines {last["ironmines"]} coalmines {last["coalmines"]} smelters {last["ironsmelters"]}',
              '  stock at the end: ' + ' '.join(f'{name}={last[name]}' for name in GOODS),

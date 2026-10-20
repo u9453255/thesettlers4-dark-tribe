@@ -223,6 +223,7 @@ public:
   /* r30: the search 0x179F80 writes its chosen cell to +0x40/+0x44 (0x17A116/0x17A119) before it pushes
      job 0xAF (greening, adjacent) or 0xAE (walking to it): the aimed cell under both jobs. */
   g.aimX=(job==0xae||job==0xaf)?rx:-1;g.aimY=(job==0xae||job==0xaf)?ry:-1;
+  g.job=job; /* r50: OFFENCE_GARDENER_FAR diagnostics only */
   return true;
  }
  // Living gardeners of player p (per-player settler list, next word +0x2A), optionally in one land region.
@@ -340,8 +341,11 @@ public:
  // alive, standing in or near the territory in land region wanted; the owned Dark cells and their rise (scanTerritory).
  // Computer soldiers attack groups 2..9 except 1 (Mushroom Farmers, slaves): CAIAgentIntruderCombat's own type table
  // 0xBF0438 (46, 48, 49, 47, 50, 45) has no Dark type, so the director leads the defence.
+ // r50: ownX/ownY = the mean position of the owned Dark cells, from the last full pass's 16x16 block counts (block centres
+ // weighted by their counts), -1 without any.
  void intrusion(uint8_t p,int wanted,Intrusion&in)const{
   in=Intrusion{};if(p<2||p>8)return;in.own=ownedDark(p);in.rise=rise[p];static const uint16_t types[]={52,29,32,54};
+  {long sx=0,sy=0,sum=0;for(int b=0;b<Blocks*Blocks;b++){int k=owned[p][b];if(!k)continue;sx+=(long)k*((b%Blocks)*Block+Block/2);sy+=(long)k*((b/Blocks)*Block+Block/2);sum+=k;}if(sum>0){in.ownX=(int)(sx/sum);in.ownY=(int)(sy/sum);}}
   for(uint16_t type:types){uint32_t head=0;if(!read(image+0x1144cec+(DarkPlayer*0x43+type)*4,head))continue;
    uint16_t id=(uint16_t)head;for(int guard=0;id&&guard<4096;guard++){uintptr_t e=entity(id);if(!e)break;uint16_t next=value<uint16_t>(e+0x2a);
     uint32_t bits=value<uint32_t>(e+0x14);BYTE cls=value<BYTE>(e+10),who=value<BYTE>(e+32),hp=value<BYTE>(e+33);
